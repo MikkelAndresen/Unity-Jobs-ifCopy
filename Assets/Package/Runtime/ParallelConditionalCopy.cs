@@ -150,7 +150,7 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 
 		BitField64 bits = new BitField64(0);
 		int dataIndex = index * 64;
-
+		
 		for (int i = 0; i < 64; i++)
 		{
 			bool v = del.Validate(src[dataIndex + i]);
@@ -282,7 +282,17 @@ public unsafe struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, ICondit
 			i++;
 			n >>= tzcnt + 1;
 		}
-
+		
+		// The following code is slightly slower than the above code
+		// int total_set_bits = math.countbits(n);
+		// for (int i = 0, bitIndex = 0; i < total_set_bits; ++bitIndex)
+		// {
+		// 	if ((n & (1UL << bitIndex)) != 0)
+		// 	{
+		// 		writer.Write(dstStartIndex + i, srcStartIndex + bitIndex);
+		// 		++i;
+		// 	}
+		// }
 		//parallelCopyJobMarker.End();
 	}
 
