@@ -154,7 +154,7 @@ namespace Tests
 
 			for (int i = 0; i < dst.Length; i++)
 			{
-				Debug.Log($"Expected/Actual: {expected[i]}/{dst[i]}");
+				// Debug.Log($"Expected/Actual: {expected[i]}/{dst[i]}");
 				Assert.AreEqual(expected[i], dst[i], $"Index {i} had the wrong value");
 			}
 		}
