@@ -7,6 +7,7 @@ using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
+using UnityEngine.Assertions;
 using UnityEngine.UIElements;
 using static Unity.Burst.Intrinsics.X86.Avx;
 using static Unity.Burst.Intrinsics.X86.Sse;
@@ -36,6 +37,87 @@ public interface IIndexWriter<T> : IIndexWriter where T : unmanaged { }
 public interface IConditionalCopyJob<T, W> where T : unmanaged where W : struct, IIndexWriter<T> { }
 
 public interface IConditionalIndexingJob<T, M> where T : unmanaged where M : IValidator<T> { }
+
+public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
+{
+	[ReadOnly, NativeDisableParallelForRestriction]
+	private NativeArray<T> src;
+
+	[WriteOnly, NativeDisableParallelForRestriction]
+	private NativeArray<T> dst;
+
+	[ReadOnly, NativeDisableUnsafePtrRestriction]
+	private readonly T* srcPtr;
+
+	[WriteOnly, NativeDisableUnsafePtrRestriction]
+	private readonly T* dstPtr;
+
+	public GenericWriter(NativeArray<T> src, NativeArray<T> dst)
+	{
+		this.dst = dst;
+		this.src = src;
+		srcPtr = (T*)src.GetUnsafeReadOnlyPtr();
+		dstPtr = (T*)dst.GetUnsafeReadOnlyPtr();
+	}
+
+	public NativeArray<T> GetSrc() => src;
+	public NativeArray<T> GetDst() => dst;
+
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public void Write(int dstIndex, int srcIndex)
+	{
+		// Prefetch(dstIndex, srcIndex);
+		dst[dstIndex] = src[srcIndex];
+	}
+
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public void Write(int dstIndex, int srcIndex, int srcRange)
+	{
+		// Prefetch(dstIndex, srcIndex);
+		for (int i = 0; i < srcRange; i++)
+			dstPtr[dstIndex + i] = srcPtr[srcIndex + i];
+	}
+
+	public void Prefetch(int dstIndex, int srcIndex)
+	{
+#if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
+		Common.Prefetch(srcPtr + srcIndex, Common.ReadWrite.Read, Common.Locality.LowTemporalLocality);
+		Common.Prefetch(dstPtr + dstIndex, Common.ReadWrite.Write, Common.Locality.HighTemporalLocality);
+#endif
+	}
+	
+	public JobHandle Schedule<V>(
+		int indexingBatchCount = 64,
+		int writeBatchCount = 64,
+		NativeArray<BitField64> bits = default,
+		NativeArray<int> counts = default,
+		NativeReference<int> counter = default) where  V : unmanaged, IValidator<T>
+	{
+		Assert.AreEqual(src.Length, dst.Length);
+		
+		bool tempBits = !bits.IsCreated;
+		if (tempBits)
+			bits = new NativeArray<BitField64>((int)math.ceil(src.Length / 64f), Allocator.TempJob);
+		bool tempCounts = !counts.IsCreated;
+		if (tempCounts)
+			counts = new NativeArray<int>(src.Length, Allocator.TempJob);
+		bool tempCounter = !counter.IsCreated;
+		if (tempCounter)
+			counter = new NativeReference<int>(0, Allocator.TempJob);
+		
+		var handle = ParallelIndexingSumJob<T, V>.Schedule(src, bits, counts, counter, out var indexSumJob, indexingBatchCount);
+		handle = ParallelConditionalCopyJob<T, GenericWriter<T>>.Schedule(indexSumJob, this, writeBatchCount, handle);
+		
+		if(tempBits)
+			bits.Dispose(handle);
+		if (tempCounts)
+			counts.Dispose(handle);
+		if (tempCounter)
+			counter.Dispose(handle);
+		
+		return handle;
+	}
+}
 
 /// <summary>
 /// This job is meant to pack booleans into <see cref="indices"/>.
