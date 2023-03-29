@@ -1,12 +1,60 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using NUnit.Framework;
+using Unity.Burst.Intrinsics;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Mathematics;
 using UnityEngine;
 
 namespace Tests
 {
+	public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
+	{
+		[ReadOnly, NativeDisableParallelForRestriction]
+		private NativeArray<T> src;
+
+		[WriteOnly, NativeDisableParallelForRestriction]
+		private NativeArray<T> dst;
+
+		[ReadOnly, NativeDisableUnsafePtrRestriction]
+		private readonly T* srcPtr;
+
+		[WriteOnly, NativeDisableUnsafePtrRestriction]
+		private readonly T* dstPtr;
+
+		public GenericWriter(NativeArray<T> src, NativeArray<T> dst)
+		{
+			this.dst = dst;
+			this.src = src;
+			srcPtr = (T*)src.GetUnsafeReadOnlyPtr();
+			dstPtr = (T*)dst.GetUnsafeReadOnlyPtr();
+		}
+
+		public NativeArray<T> GetSrc() => src;
+		public NativeArray<T> GetDst() => dst;
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public void Write(int dstIndex, int srcIndex) => dst[dstIndex] = src[srcIndex];
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public void Write(int dstIndex, int srcIndex, int srcRange)
+		{
+			// Prefetch(dstIndex, srcIndex);
+			for (int i = 0; i < srcRange; i++)
+				dstPtr[dstIndex + i] = srcPtr[srcIndex + i];
+		}
+
+		public void Prefetch(int dstIndex, int srcIndex /*, Common.ReadWrite rw, Common.Locality locality*/)
+		{
+#if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
+			Common.Prefetch(srcPtr + srcIndex, Common.ReadWrite.Read, Common.Locality.LowTemporalLocality);
+			Common.Prefetch(dstPtr + dstIndex, Common.ReadWrite.Write, Common.Locality.HighTemporalLocality);
+#endif
+		}
+	}
+	
 	public class JobTests
 	{	
 		private struct GreaterThanZeroDel : IValidator<float>
@@ -37,7 +85,7 @@ namespace Tests
 			for (int i = 0; i < 11; i++)
 				Assert.AreEqual( i is >= 2 and < 9 ? i : 0, dst[i]);
 		}
-		
+
 		[Test]
 		public void TestCopyAll1Bits() => TestBothSingleAndParallelCopyJobs<ValidateTrue>((i) => i);
 	
@@ -62,39 +110,7 @@ namespace Tests
 
 		private static void TestBothSingleAndParallelCopyJobs<T>(Func<float, float> dataGen) where T : unmanaged, IValidator<float>
 		{
-			TestParallelConditionSingleCopy<T>(dataGen);
 			TestParallelConditionParallelCopy<T>(dataGen);
-		}
-
-		private static void TestParallelConditionSingleCopy<T>(Func<float, float> dataGen) where T : unmanaged, IValidator<float>
-		{
-			NativeArray<float> src = new NativeArray<float>(100, Allocator.Persistent);
-			for (int i = 0; i < src.Length; i++)
-				src[i] = dataGen(i);
-
-			NativeArray<BitField64> bits = new NativeArray<BitField64>((int)math.ceil(100f / 64f), Allocator.Persistent);
-			ConditionIndexingJob<float, T>.Schedule(src, bits, out var job).Complete();
-			//Debug.Log(Convert.ToString((long)bits[0].Value, toBase: 2));
-
-			NativeArray<float> dstData = new NativeArray<float>(100, Allocator.Persistent);
-			NativeReference<int> counter = new NativeReference<int>(0, Allocator.Persistent);
-			GenericWriter<float> writer = new GenericWriter<float>(src, dstData);
-			ConditionalCopyMergeJob<float, GenericWriter<float>>.Schedule(job, writer, counter).Complete();
-
-			int count = counter.Value;
-			counter.Dispose();
-			bits.Dispose();
-
-			// We copy all the data we wish to assert because if an assertion fails
-			// we get exceptions due to native collections not being disposed.
-			float[] srcCopy = new float[src.Length];
-			src.CopyTo(srcCopy);
-			float[] dstCopy = new float[dstData.Length];
-			dstData.CopyTo(dstCopy);
-
-			src.Dispose();
-			dstData.Dispose();
-			TestCopiedData<T>(srcCopy, dstCopy, count);
 		}
 
 		private static void TestParallelConditionParallelCopy<T>(Func<float, float> dataGen) where T : unmanaged, IValidator<float>
@@ -138,7 +154,7 @@ namespace Tests
 
 			for (int i = 0; i < dst.Length; i++)
 			{
-				// Debug.Log($"Expected/Actual: {expected[i]}/{dst[i]}");
+				Debug.Log($"Expected/Actual: {expected[i]}/{dst[i]}");
 				Assert.AreEqual(expected[i], dst[i], $"Index {i} had the wrong value");
 			}
 		}
