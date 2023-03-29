@@ -89,6 +89,7 @@ public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
 	public JobHandle Schedule<V>(
 		int indexingBatchCount = 64,
 		int writeBatchCount = 64,
+		JobHandle dependsOn = default,
 		NativeArray<BitField64> bits = default,
 		NativeArray<int> counts = default,
 		NativeReference<int> counter = default) where  V : unmanaged, IValidator<T>
@@ -105,7 +106,7 @@ public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
 		if (tempCounter)
 			counter = new NativeReference<int>(0, Allocator.TempJob);
 		
-		var handle = ParallelIndexingSumJob<T, V>.Schedule(src, bits, counts, counter, out var indexSumJob, indexingBatchCount);
+		var handle = ParallelIndexingSumJob<T, V>.Schedule(src, bits, counts, counter, out var indexSumJob, indexingBatchCount, dependsOn);
 		handle = ParallelConditionalCopyJob<T, GenericWriter<T>>.Schedule(indexSumJob, this, writeBatchCount, handle);
 		
 		if(tempBits)
@@ -214,6 +215,7 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 		NativeReference<int> totalCount,
 		out ParallelIndexingSumJob<T, V> job,
 		int innerBatchCount = 10,
+		JobHandle dependsOn = default,
 		V del = default)
 	{
 		int remainder = src.Length % 64;
@@ -221,7 +223,7 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 		int length = (int)math.floor(src.Length / 64f);
 		job = new ParallelIndexingSumJob<T, V>(src, indices, counts);
 
-		var handle = job.Schedule(length, innerBatchCount);
+		var handle = job.Schedule(length, innerBatchCount, dependsOn);
 		if (remainder > 0)
 			handle = new RemainderSumJob
 			{
