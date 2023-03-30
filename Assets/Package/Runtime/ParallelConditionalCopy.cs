@@ -1,4 +1,3 @@
-using System;
 using System.Runtime.CompilerServices;
 using Unity.Burst;
 using Unity.Burst.Intrinsics;
@@ -6,19 +5,7 @@ using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Mathematics;
-using UnityEngine;
 using UnityEngine.Assertions;
-using UnityEngine.UIElements;
-using static Unity.Burst.Intrinsics.X86.Avx;
-using static Unity.Burst.Intrinsics.X86.Sse;
-using static Unity.Burst.Intrinsics.X86.Sse2;
-using static Unity.Burst.Intrinsics.X86.Sse3;
-using static Unity.Burst.Intrinsics.X86.Sse4_1;
-using static Unity.Burst.Intrinsics.X86.Sse4_2;
-using Random = Unity.Mathematics.Random;
-#if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
-using Unity.Burst.Intrinsics;
-#endif
 
 public interface IValidator<in T> where T : unmanaged
 {
@@ -38,11 +25,12 @@ public interface IConditionalCopyJob<T, W> where T : unmanaged where W : struct,
 
 public interface IConditionalIndexingJob<T, M> where T : unmanaged where M : IValidator<T> { }
 
+[BurstCompatible, BurstCompile]
 public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
 {
 	[ReadOnly, NativeDisableParallelForRestriction]
 	private NativeArray<T> src;
-
+	
 	[WriteOnly, NativeDisableParallelForRestriction]
 	private NativeArray<T> dst;
 
@@ -60,20 +48,16 @@ public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
 		dstPtr = (T*)dst.GetUnsafeReadOnlyPtr();
 	}
 
-	public NativeArray<T> GetSrc() => src;
-	public NativeArray<T> GetDst() => dst;
-
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	public void Write(int dstIndex, int srcIndex)
 	{
-		// Prefetch(dstIndex, srcIndex);
+		Prefetch(dstIndex, srcIndex);
 		dst[dstIndex] = src[srcIndex];
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	public void Write(int dstIndex, int srcIndex, int srcRange)
 	{
-		// Prefetch(dstIndex, srcIndex);
 		for (int i = 0; i < srcRange; i++)
 			dstPtr[dstIndex + i] = srcPtr[srcIndex + i];
 	}
@@ -122,7 +106,7 @@ public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
 
 /// <summary>
 /// This job is meant to pack booleans into <see cref="indices"/>.
-/// Then you can use <see cref="ConditionalCopyMergeJob{T,W}"/> to write to a destination array based on the <see cref="indices"/> array.
+/// Then you can use <see cref="ParallelConditionalCopyJob{T,W}"/> to write to a destination array based on the <see cref="indices"/> array.
 /// It also counts the bits set and assigns them to <see cref="counts"/>.
 /// </summary>
 /// <typeparam name="T"></typeparam>
