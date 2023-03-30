@@ -10,51 +10,6 @@ using UnityEngine;
 
 namespace Tests
 {
-	public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
-	{
-		[ReadOnly, NativeDisableParallelForRestriction]
-		private NativeArray<T> src;
-
-		[WriteOnly, NativeDisableParallelForRestriction]
-		private NativeArray<T> dst;
-
-		[ReadOnly, NativeDisableUnsafePtrRestriction]
-		private readonly T* srcPtr;
-
-		[WriteOnly, NativeDisableUnsafePtrRestriction]
-		private readonly T* dstPtr;
-
-		public GenericWriter(NativeArray<T> src, NativeArray<T> dst)
-		{
-			this.dst = dst;
-			this.src = src;
-			srcPtr = (T*)src.GetUnsafeReadOnlyPtr();
-			dstPtr = (T*)dst.GetUnsafeReadOnlyPtr();
-		}
-
-		public NativeArray<T> GetSrc() => src;
-		public NativeArray<T> GetDst() => dst;
-
-		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public void Write(int dstIndex, int srcIndex) => dst[dstIndex] = src[srcIndex];
-
-		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public void Write(int dstIndex, int srcIndex, int srcRange)
-		{
-			// Prefetch(dstIndex, srcIndex);
-			for (int i = 0; i < srcRange; i++)
-				dstPtr[dstIndex + i] = srcPtr[srcIndex + i];
-		}
-
-		public void Prefetch(int dstIndex, int srcIndex /*, Common.ReadWrite rw, Common.Locality locality*/)
-		{
-#if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
-			Common.Prefetch(srcPtr + srcIndex, Common.ReadWrite.Read, Common.Locality.LowTemporalLocality);
-			Common.Prefetch(dstPtr + dstIndex, Common.ReadWrite.Write, Common.Locality.HighTemporalLocality);
-#endif
-		}
-	}
-	
 	public class JobTests
 	{	
 		private struct GreaterThanZeroDel : IValidator<float>
