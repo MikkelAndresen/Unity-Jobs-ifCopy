@@ -74,7 +74,6 @@ public static class NativeCollectionExtensions
 			counts.Dispose(handle);
 		
 		return handle;
-		// return writer.Schedule<V>(indexingBatchCount, writeBatchCount, dependsOn, bits, counts, counter);
 	}
 	
 	public static JobHandle IfCopyToParallel<T, V>(this NativeArray<T> src, NativeList<T> dst,
@@ -84,8 +83,6 @@ public static class NativeCollectionExtensions
 		NativeArray<BitField64> indices = default,
 		NativeArray<int> counts = default) where T : unmanaged where V : unmanaged, IValidator<T>
 	{
-		// GenericListWriter<T> writer = new GenericListWriter<T>(src, dst);
-		
 		Assert.IsTrue(dst.Capacity >= src.Length, "Assert Failed: dst.Capacity < src.Length");
 		dst.ResizeUninitialized(dst.Capacity);
 		
@@ -130,15 +127,14 @@ public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public readonly void Write(int dstIndex, int srcIndex)
+	public void Write(int dstIndex, int srcIndex)
 	{
 		Prefetch(dstIndex, srcIndex);
-		// dst[dstIndex] = src[srcIndex];
-		dstPtr[dstIndex] = srcPtr[srcIndex];
+		dst[dstIndex] = src[srcIndex];
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public readonly void Write(int dstIndex, int srcIndex, int srcRange)
+	public void Write(int dstIndex, int srcIndex, int srcRange)
 	{
 		for (int i = 0; i < srcRange; i++)
 			dstPtr[dstIndex + i] = srcPtr[srcIndex + i];

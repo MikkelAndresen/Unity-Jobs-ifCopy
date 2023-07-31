@@ -19,6 +19,7 @@ public class CopyTestBehaviour : MonoBehaviour
 	private NativeArray<float> src;
 	private NativeList<float> dstData;
 	private NativeReference<int> counter;
+	private NativeReference<int> tempCounter;
 	private NativeArray<int> counts;
 	private NativeArray<BitField64> indices;
 	private ComputeBuffer gpuBuffer;
@@ -32,9 +33,9 @@ public class CopyTestBehaviour : MonoBehaviour
 		src = new NativeArray<float>(dataLength, Allocator.Persistent);
 		indices = new NativeArray<BitField64>((int)math.ceil(dataLength / 64f), Allocator.Persistent);
 		dstData = new NativeList<float>(dataLength, Allocator.Persistent);
-		counter = new NativeReference<int>(0, Allocator.Persistent);
 		counts = new NativeArray<int>(indices.Length, Allocator.Persistent);
-
+		counter = new NativeReference<int>(Allocator.Persistent);
+		
 		for (int i = 0; i < src.Length; i++)
 			src[i] = GetData(i);
 
@@ -46,20 +47,32 @@ public class CopyTestBehaviour : MonoBehaviour
 	private void Update()
 	{
 		counter.Value = 0;
-		var writer = useGPUBuffer ? 
-			new GenericWriter<float>(src, gpuBuffer.BeginWrite<float>(0, dataLength)) : 
-			new GenericWriter<float>(src, dstData);
-
+		
 		if (useScheduleUtility)
 		{
-			handle = src.IfCopyToParallel<float, GreaterThanZeroDel>(dstData, indexingBatchCount, writeBatchCount, default, 
-				useScheduleUtilityPreAllocatedCollections ? indices : default,
-				useScheduleUtilityPreAllocatedCollections ? counts : default);
+			if (useGPUBuffer) // Array
+			{
+				var dst = gpuBuffer.BeginWrite<float>(0, dataLength);
+				handle = src.IfCopyToParallel<float, GreaterThanZeroDel>(dst, out tempCounter, indexingBatchCount, writeBatchCount, default,
+					useScheduleUtilityPreAllocatedCollections ? indices : default,
+					useScheduleUtilityPreAllocatedCollections ? counts : default);
+			}
+			else // List
+			{
+				handle = src.IfCopyToParallel<float, GreaterThanZeroDel>(dstData, indexingBatchCount, writeBatchCount, default,
+					useScheduleUtilityPreAllocatedCollections ? indices : default,
+					useScheduleUtilityPreAllocatedCollections ? counts : default);
+			}
+			
 			if (!completeInLateUpdate)
 				handle.Complete();
 		}
 		else
 		{
+			var writer = useGPUBuffer ? 
+				new GenericWriter<float>(src, gpuBuffer.BeginWrite<float>(0, dataLength)) : 
+				new GenericWriter<float>(src, dstData);
+			
 			var copyJob = new ParallelConditionalCopyJob<float, GenericWriter<float>>(writer, indices, counts);
 
 			indexingSumJobMarker.Begin();
@@ -76,8 +89,8 @@ public class CopyTestBehaviour : MonoBehaviour
 			parallelCopyJobMarker.End();
 		}
 
-		if (useGPUBuffer && !completeInLateUpdate)
-			gpuBuffer.EndWrite<float3x4>(dataLength);
+		if (!completeInLateUpdate)
+			EndGPUWrite();
 	}
 
 	private void LateUpdate()
@@ -86,8 +99,13 @@ public class CopyTestBehaviour : MonoBehaviour
 			return;
 
 		handle.Complete();
+		EndGPUWrite();
+	}
+
+	private void EndGPUWrite()
+	{
 		if (useGPUBuffer)
-			gpuBuffer.EndWrite<float3x4>(dataLength);
+			gpuBuffer.EndWrite<float>(tempCounter.IsCreated ? tempCounter.Value : dataLength);
 	}
 	
 	protected float GetData(int i) =>
@@ -106,6 +124,8 @@ public class CopyTestBehaviour : MonoBehaviour
 		indices.Dispose();
 		dstData.Dispose();
 		counter.Dispose();
+		if (tempCounter.IsCreated)
+			tempCounter.Dispose();
 		counts.Dispose();
 		if (useGPUBuffer)
 			gpuBuffer.Dispose();
