@@ -41,8 +41,6 @@ public class CopyTestBehaviour : MonoBehaviour
 		if (useGPUBuffer)
 			gpuBuffer = new ComputeBuffer(dataLength, UnsafeUtility.SizeOf(typeof(float)), ComputeBufferType.Default,
 				ComputeBufferMode.SubUpdates);
-		// For testing
-		dstData.Length = dataLength;
 	}
 
 	private void Update()
