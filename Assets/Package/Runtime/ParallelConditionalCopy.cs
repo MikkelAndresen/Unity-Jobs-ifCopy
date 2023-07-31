@@ -103,7 +103,7 @@ public static class NativeCollectionExtensions
 	}
 }
 
-[BurstCompatible, BurstCompile]
+[GenerateTestsForBurstCompatibility, BurstCompile]
 public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
 {
 	[ReadOnly, NativeDisableParallelForRestriction]
@@ -156,7 +156,7 @@ public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
 /// </summary>
 /// <typeparam name="T"></typeparam>
 /// <typeparam name="V"></typeparam>
-[BurstCompile, BurstCompatible]
+[BurstCompile, GenerateTestsForBurstCompatibility]
 public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexingJob<T, V> where T : unmanaged where V : IValidator<T>
 {
 	[ReadOnly] public V del;
@@ -201,7 +201,7 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 	/// This job sets the bits and sums the last element of <see cref="indices"/>.
 	/// It also will count all the bits at the end and store the count so far in <see cref="counts"/>.
 	/// </summary>
-	[BurstCompile, BurstCompatible]
+	[BurstCompile, GenerateTestsForBurstCompatibility]
 	private struct RemainderSumJob : IJob
 	{
 		[ReadOnly] public V del;
@@ -266,7 +266,7 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 	}
 }
 
-[BurstCompile, BurstCompatible]
+[BurstCompile, GenerateTestsForBurstCompatibility]
 public unsafe struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCopyJob<T, W> where T : unmanaged where W : struct, IIndexWriter<T>
 {
 	public W writer;
