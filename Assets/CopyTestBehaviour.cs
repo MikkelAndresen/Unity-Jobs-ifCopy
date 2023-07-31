@@ -13,6 +13,7 @@ public class CopyTestBehaviour : MonoBehaviour
 	[SerializeField] private int writeBatchCount = 2;
 	[SerializeField] private bool completeInLateUpdate = false;
 	[SerializeField] private bool useScheduleUtility;
+	[SerializeField] private bool useScheduleUtilityPreAllocatedCollections;
 	[SerializeField] private TestDataType dataGenMethod = TestDataType.Odd;
 
 	private NativeArray<float> src;
@@ -53,7 +54,9 @@ public class CopyTestBehaviour : MonoBehaviour
 
 		if (useScheduleUtility)
 		{
-			handle = src.IfCopyToParallel<float, GreaterThanZeroDel>(dstData, indexingBatchCount, writeBatchCount);
+			handle = src.IfCopyToParallel<float, GreaterThanZeroDel>(dstData, indexingBatchCount, writeBatchCount, default, 
+				useScheduleUtilityPreAllocatedCollections ? indices : default,
+				useScheduleUtilityPreAllocatedCollections ? counts : default);
 			if (!completeInLateUpdate)
 				handle.Complete();
 		}
