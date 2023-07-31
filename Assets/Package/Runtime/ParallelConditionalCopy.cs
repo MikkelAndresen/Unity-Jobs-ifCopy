@@ -25,6 +25,87 @@ public interface IConditionalCopyJob<T, W> where T : unmanaged where W : struct,
 
 public interface IConditionalIndexingJob<T, M> where T : unmanaged where M : IValidator<T> { }
 
+public static class NativeCollectionExtensions
+{
+	/// <summary>
+	/// Copies data filtered from <param name="src"></param> to <param name="dst"></param> using <see cref="IValidator{T}"/> and parallel for jobs.
+	/// There is one step in the job chain which just uses a <see cref="IJobFor"/> to count how many should be written.
+	/// The count written is accesible from <param name="counter"></param> which must be disposed of after use.
+	/// </summary>
+	/// <param name="src"></param>
+	/// <param name="dst"></param>
+	/// <param name="counter"></param>
+	/// <param name="indexingBatchCount"></param>
+	/// <param name="writeBatchCount"></param>
+	/// <param name="dependsOn"></param>
+	/// <param name="indices"></param>
+	/// <param name="counts"></param>
+	/// <typeparam name="T"></typeparam>
+	/// <typeparam name="V"></typeparam>
+	/// <returns></returns>
+	public static JobHandle IfCopyToParallel<T, V>(this NativeArray<T> src, NativeArray<T> dst,
+		out NativeReference<int> counter,
+		int indexingBatchCount = 64,
+		int writeBatchCount = 64,
+		JobHandle dependsOn = default,
+		NativeArray<BitField64> indices = default,
+		NativeArray<int> counts = default) where T : unmanaged where V : unmanaged, IValidator<T>
+	{
+		GenericWriter<T> writer = new GenericWriter<T>(src, dst);
+		Assert.IsTrue(dst.Length >= src.Length, "Assert Failed: dst.Length < src.Length");
+		
+		bool tempBits = !indices.IsCreated;
+		if (tempBits)
+			indices = new NativeArray<BitField64>((int)math.ceil(src.Length / 64f), Allocator.TempJob);
+		bool tempCounts = !counts.IsCreated;
+		if (tempCounts)
+			counts = new NativeArray<int>(src.Length, Allocator.TempJob);
+		counter = new NativeReference<int>(0, Allocator.TempJob);
+		
+		ParallelConditionalCopyJob<T, GenericWriter<T>> copyJob = new ParallelConditionalCopyJob<T, GenericWriter<T>>(writer, indices, counts);
+		int indicesLength = indices.Length;
+
+		var handle = ParallelIndexingSumJob<T, V>.Schedule(src, indices, counts, counter, indexingBatchCount, dependsOn);
+		handle = copyJob.Schedule(indicesLength, writeBatchCount, handle);
+
+		if(tempBits)
+			indices.Dispose(handle);
+		if (tempCounts)
+			counts.Dispose(handle);
+		
+		return handle;
+		// return writer.Schedule<V>(indexingBatchCount, writeBatchCount, dependsOn, bits, counts, counter);
+	}
+	
+	public static JobHandle IfCopyToParallel<T, V>(this NativeArray<T> src, NativeList<T> dst,
+		int indexingBatchCount = 64,
+		int writeBatchCount = 64,
+		JobHandle dependsOn = default,
+		NativeArray<BitField64> indices = default,
+		NativeArray<int> counts = default) where T : unmanaged where V : unmanaged, IValidator<T>
+	{
+		// GenericListWriter<T> writer = new GenericListWriter<T>(src, dst);
+		
+		Assert.IsTrue(dst.Capacity >= src.Length, "Assert Failed: dst.Capacity < src.Length");
+		dst.ResizeUninitialized(dst.Capacity);
+		
+		var handle = src.IfCopyToParallel<T, V>(dst.AsArray(), out var counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts);
+		// Set length to the counted length instead of capacity
+		handle = new AssignJobLengthJob<T>() { dst = dst, count = counter }.Schedule(handle);
+		counter.Dispose(handle);
+		
+		return handle;
+	}
+
+	private struct AssignJobLengthJob<T> : IJob where T : unmanaged
+	{
+		public NativeList<T> dst;
+		public NativeReference<int> count;
+		
+		public void Execute() => dst.ResizeUninitialized(count.Value);
+	}
+}
+
 [BurstCompatible, BurstCompile]
 public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
 {
@@ -39,7 +120,7 @@ public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
 
 	[WriteOnly, NativeDisableUnsafePtrRestriction]
 	private readonly T* dstPtr;
-
+	
 	public GenericWriter(NativeArray<T> src, NativeArray<T> dst)
 	{
 		this.dst = dst;
@@ -49,58 +130,26 @@ public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public void Write(int dstIndex, int srcIndex)
+	public readonly void Write(int dstIndex, int srcIndex)
 	{
 		Prefetch(dstIndex, srcIndex);
-		dst[dstIndex] = src[srcIndex];
+		// dst[dstIndex] = src[srcIndex];
+		dstPtr[dstIndex] = srcPtr[srcIndex];
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public void Write(int dstIndex, int srcIndex, int srcRange)
+	public readonly void Write(int dstIndex, int srcIndex, int srcRange)
 	{
 		for (int i = 0; i < srcRange; i++)
 			dstPtr[dstIndex + i] = srcPtr[srcIndex + i];
 	}
 
-	public void Prefetch(int dstIndex, int srcIndex)
+	public readonly void Prefetch(int dstIndex, int srcIndex)
 	{
 #if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
 		Common.Prefetch(srcPtr + srcIndex, Common.ReadWrite.Read, Common.Locality.LowTemporalLocality);
 		Common.Prefetch(dstPtr + dstIndex, Common.ReadWrite.Write, Common.Locality.HighTemporalLocality);
 #endif
-	}
-	
-	public JobHandle Schedule<V>(
-		int indexingBatchCount = 64,
-		int writeBatchCount = 64,
-		JobHandle dependsOn = default,
-		NativeArray<BitField64> bits = default,
-		NativeArray<int> counts = default,
-		NativeReference<int> counter = default) where  V : unmanaged, IValidator<T>
-	{
-		Assert.AreEqual(src.Length, dst.Length);
-		
-		bool tempBits = !bits.IsCreated;
-		if (tempBits)
-			bits = new NativeArray<BitField64>((int)math.ceil(src.Length / 64f), Allocator.TempJob);
-		bool tempCounts = !counts.IsCreated;
-		if (tempCounts)
-			counts = new NativeArray<int>(src.Length, Allocator.TempJob);
-		bool tempCounter = !counter.IsCreated;
-		if (tempCounter)
-			counter = new NativeReference<int>(0, Allocator.TempJob);
-		
-		var handle = ParallelIndexingSumJob<T, V>.Schedule(src, bits, counts, counter, out var indexSumJob, indexingBatchCount, dependsOn);
-		handle = ParallelConditionalCopyJob<T, GenericWriter<T>>.Schedule(indexSumJob, this, writeBatchCount, handle);
-		
-		if(tempBits)
-			bits.Dispose(handle);
-		if (tempCounts)
-			counts.Dispose(handle);
-		if (tempCounter)
-			counter.Dispose(handle);
-		
-		return handle;
 	}
 }
 
@@ -197,7 +246,6 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 		NativeArray<BitField64> indices,
 		NativeArray<int> counts,
 		NativeReference<int> totalCount,
-		out ParallelIndexingSumJob<T, V> job,
 		int innerBatchCount = 10,
 		JobHandle dependsOn = default,
 		V del = default)
@@ -205,7 +253,7 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 		int remainder = src.Length % 64;
 		// The job only supports writing whole 64 bit batches, so we floor here and then run the remainder elsewhere
 		int length = (int)math.floor(src.Length / 64f);
-		job = new ParallelIndexingSumJob<T, V>(src, indices, counts);
+		var job = new ParallelIndexingSumJob<T, V>(src, indices, counts);
 
 		var handle = job.Schedule(length, innerBatchCount, dependsOn);
 		if (remainder > 0)
@@ -215,9 +263,9 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 				indices = indices,
 				counts = counts,
 				totalCount = totalCount,
-				del = del
+				del = del,
 			}.Schedule(handle);
-
+		
 		return handle;
 	}
 }
@@ -231,16 +279,12 @@ public unsafe struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, ICondit
 	[NativeDisableUnsafePtrRestriction, ReadOnly]
 	private readonly BitField64* bitsPtr;
 
-	// private readonly int indicesLength;
-	// private static readonly ProfilerMarker parallelCopyJobMarker = new ProfilerMarker(nameof(ParallelConditionalCopyJob<T, W>));
-
 	public ParallelConditionalCopyJob(
 		W writer,
 		NativeArray<BitField64> indices,
 		NativeArray<int> counts)
 	{
 		this.writer = writer;
-		// indicesLength = indices.Length;
 		this.counts = counts;
 		bitsPtr = (BitField64*)indices.GetUnsafeReadOnlyPtr();
 	}
@@ -254,16 +298,13 @@ public unsafe struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, ICondit
 
 		int srcStartIndex = index * 64;
 		ulong n = bitsPtr[index].Value;
-
-		// writer.Prefetch(dstStartIndex, srcStartIndex);
-
+		
 		int i = 0;
 		int t = 0;
 		while (n != 0)
 		{
 			int tzcnt = math.tzcnt(n);
 			t += tzcnt;
-			//Debug.Log($"Writing from index {srcStartIndex + t + i}");
 			writer.Write(dstStartIndex + i, srcStartIndex + t + i);
 			i++;
 			n >>= tzcnt + 1;
@@ -280,16 +321,5 @@ public unsafe struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, ICondit
 		// 	}
 		// }
 		//parallelCopyJobMarker.End();
-	}
-
-	public static JobHandle Schedule<V>(ParallelIndexingSumJob<T, V> indexingJob,
-		W writer,
-		int innerBatchCount = 10,
-		JobHandle dependsOn = default) where V : IValidator<T>
-	{
-		ParallelConditionalCopyJob<T, W> job = new ParallelConditionalCopyJob<T, W>(writer, indexingJob.indices, indexingJob.counts);
-		var handle = job.Schedule(indexingJob.indices.Length, innerBatchCount, dependsOn);
-
-		return handle;
 	}
 }
