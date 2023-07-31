@@ -39,6 +39,8 @@ namespace Tests
 			writer.Write(2,2,7);
 			for (int i = 0; i < 11; i++)
 				Assert.AreEqual( i is >= 2 and < 9 ? i : 0, dst[i]);
+			src.Dispose();
+			dst.Dispose();
 		}
 
 		[Test]
@@ -74,30 +76,35 @@ namespace Tests
 			for (int i = 0; i < src.Length; i++)
 				src[i] = dataGen(i);
 
-			NativeArray<BitField64> bits = new NativeArray<BitField64>((int)math.ceil(100f / 64f), Allocator.Persistent);
-			NativeArray<int> counts = new NativeArray<int>(bits.Length, Allocator.Persistent);
-			NativeReference<int> counter = new NativeReference<int>(0, Allocator.Persistent);
-			ParallelIndexingSumJob<float, T>.Schedule(src, bits, counts, counter, out var job).Complete();
-			//Debug.Log(Convert.ToString((long)bits[0].Value, toBase: 2));
+			NativeArray<BitField64> indices = new NativeArray<BitField64>((int)math.ceil(100f / 64f), Allocator.Persistent);
+			NativeArray<int> counts = new NativeArray<int>(indices.Length, Allocator.Persistent);
+			NativeArray<float> dstArr = new NativeArray<float>(100, Allocator.Persistent);
+			NativeList<float> dstList = new NativeList<float>(100, Allocator.Persistent);
 
-			NativeArray<float> dstData = new NativeArray<float>(100, Allocator.Persistent);
-			GenericWriter<float> writer = new GenericWriter<float>(src, dstData);
-			ParallelConditionalCopyJob<float, GenericWriter<float>>.Schedule(job, writer).Complete();
-
+			src.IfCopyToParallel<float, T>(dstArr, out var counter, 10, 10, default, indices, counts).Complete();
+			src.IfCopyToParallel<float, T>(dstList, 10, 10, default, indices, counts).Complete();
+			
 			int count = counter.Value;
+			int listCount = dstList.Length;
 			counter.Dispose();
-			bits.Dispose();
-
+			indices.Dispose();
+			counts.Dispose();
+			
 			// We copy all the data we wish to assert because if an assertion fails
 			// we get exceptions due to native collections not being disposed.
 			float[] srcCopy = new float[src.Length];
 			src.CopyTo(srcCopy);
-			float[] dstCopy = new float[dstData.Length];
-			dstData.CopyTo(dstCopy);
-
+			float[] dstCopy = new float[dstArr.Length];
+			dstArr.CopyTo(dstCopy);
+			float[] dstListCopy = new float[dstList.Length];
+			dstList.AsArray().CopyTo(dstListCopy);
+			
 			src.Dispose();
-			dstData.Dispose();
+			dstArr.Dispose();
+			dstList.Dispose();
+			
 			TestCopiedData<T>(srcCopy, dstCopy, count);
+			TestCopiedData<T>(srcCopy, dstListCopy, listCount);
 		}
 
 		private static void TestCopiedData<T>(float[] src, float[] dst, int srcCount) where T : IValidator<float>
@@ -105,7 +112,6 @@ namespace Tests
 			(float[] expected, int expectedLength) = GetExpected<T>(src);
 
 			Assert.AreEqual(expectedLength, srcCount, "Incorrect length");
-			Assert.AreEqual(dst.Length, src.Length, "Differing length between dst and src");
 
 			for (int i = 0; i < dst.Length; i++)
 			{
