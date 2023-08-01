@@ -1,153 +1,8 @@
-using System.Runtime.CompilerServices;
 using Unity.Burst;
-using Unity.Burst.Intrinsics;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Mathematics;
-using UnityEngine.Assertions;
-
-public interface IValidator<in T> where T : unmanaged
-{
-	bool Validate(T element);
-}
-
-public interface IIndexWriter
-{
-	public void Write(int dstIndex, int srcIndex);
-	public void Write(int dstIndex, int srcIndex, int srcRange);
-	public void Prefetch(int dstIndex, int srcIndex);
-}
-
-public interface IIndexWriter<T> : IIndexWriter where T : unmanaged { }
-
-public interface IConditionalCopyJob<T, W> where T : unmanaged where W : struct, IIndexWriter<T> { }
-
-public interface IConditionalIndexingJob<T, M> where T : unmanaged where M : IValidator<T> { }
-
-public static class NativeCollectionExtensions
-{
-	/// <summary>
-	/// Copies data filtered from <param name="src"></param> to <param name="dst"></param> using <see cref="IValidator{T}"/> and parallel for jobs.
-	/// There is one step in the job chain which just uses a <see cref="IJobFor"/> to count how many should be written.
-	/// The count written is accesible from <param name="counter"></param> which must be disposed of after use.
-	/// </summary>
-	/// <param name="src"></param>
-	/// <param name="dst"></param>
-	/// <param name="counter"></param>
-	/// <param name="indexingBatchCount"></param>
-	/// <param name="writeBatchCount"></param>
-	/// <param name="dependsOn"></param>
-	/// <param name="indices"></param>
-	/// <param name="counts"></param>
-	/// <typeparam name="T"></typeparam>
-	/// <typeparam name="V"></typeparam>
-	/// <returns></returns>
-	public static JobHandle IfCopyToParallel<T, V>(this NativeArray<T> src, NativeArray<T> dst,
-		out NativeReference<int> counter,
-		int indexingBatchCount = 64,
-		int writeBatchCount = 64,
-		JobHandle dependsOn = default,
-		NativeArray<BitField64> indices = default,
-		NativeArray<int> counts = default) where T : unmanaged where V : unmanaged, IValidator<T>
-	{
-		GenericWriter<T> writer = new GenericWriter<T>(src, dst);
-		Assert.IsTrue(dst.Length >= src.Length, "Assert Failed: dst.Length < src.Length");
-		
-		bool tempBits = !indices.IsCreated;
-		if (tempBits)
-			indices = new NativeArray<BitField64>((int)math.ceil(src.Length / 64f), Allocator.TempJob);
-		bool tempCounts = !counts.IsCreated;
-		if (tempCounts)
-			counts = new NativeArray<int>(src.Length, Allocator.TempJob);
-		counter = new NativeReference<int>(0, Allocator.TempJob);
-		
-		ParallelConditionalCopyJob<T, GenericWriter<T>> copyJob = new ParallelConditionalCopyJob<T, GenericWriter<T>>(writer, indices, counts);
-		int indicesLength = indices.Length;
-
-		var handle = ParallelIndexingSumJob<T, V>.Schedule(src, indices, counts, counter, indexingBatchCount, dependsOn);
-		handle = copyJob.Schedule(indicesLength, writeBatchCount, handle);
-
-		if(tempBits)
-			indices.Dispose(handle);
-		if (tempCounts)
-			counts.Dispose(handle);
-		
-		return handle;
-	}
-	
-	public static JobHandle IfCopyToParallel<T, V>(this NativeArray<T> src, NativeList<T> dst,
-		int indexingBatchCount = 64,
-		int writeBatchCount = 64,
-		JobHandle dependsOn = default,
-		NativeArray<BitField64> indices = default,
-		NativeArray<int> counts = default) where T : unmanaged where V : unmanaged, IValidator<T>
-	{
-		Assert.IsTrue(dst.Capacity >= src.Length, "Assert Failed: dst.Capacity < src.Length");
-		dst.ResizeUninitialized(dst.Capacity);
-		
-		var handle = src.IfCopyToParallel<T, V>(dst.AsArray(), out var counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts);
-		// Set length to the counted length instead of capacity
-		handle = new AssignJobLengthJob<T>() { dst = dst, count = counter }.Schedule(handle);
-		counter.Dispose(handle);
-		
-		return handle;
-	}
-
-	private struct AssignJobLengthJob<T> : IJob where T : unmanaged
-	{
-		public NativeList<T> dst;
-		public NativeReference<int> count;
-		
-		public void Execute() => dst.ResizeUninitialized(count.Value);
-	}
-}
-
-[GenerateTestsForBurstCompatibility, BurstCompile]
-public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged
-{
-	[ReadOnly, NativeDisableParallelForRestriction]
-	private NativeArray<T> src;
-	
-	[WriteOnly, NativeDisableParallelForRestriction]
-	private NativeArray<T> dst;
-
-	[ReadOnly, NativeDisableUnsafePtrRestriction]
-	private readonly T* srcPtr;
-
-	[WriteOnly, NativeDisableUnsafePtrRestriction]
-	private readonly T* dstPtr;
-	
-	public GenericWriter(NativeArray<T> src, NativeArray<T> dst)
-	{
-		this.dst = dst;
-		this.src = src;
-		srcPtr = (T*)src.GetUnsafeReadOnlyPtr();
-		dstPtr = (T*)dst.GetUnsafeReadOnlyPtr();
-	}
-
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public void Write(int dstIndex, int srcIndex)
-	{
-		Prefetch(dstIndex, srcIndex);
-		dst[dstIndex] = src[srcIndex];
-	}
-
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public void Write(int dstIndex, int srcIndex, int srcRange)
-	{
-		for (int i = 0; i < srcRange; i++)
-			dstPtr[dstIndex + i] = srcPtr[srcIndex + i];
-	}
-
-	public readonly void Prefetch(int dstIndex, int srcIndex)
-	{
-#if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
-		Common.Prefetch(srcPtr + srcIndex, Common.ReadWrite.Read, Common.Locality.LowTemporalLocality);
-		Common.Prefetch(dstPtr + dstIndex, Common.ReadWrite.Write, Common.Locality.HighTemporalLocality);
-#endif
-	}
-}
 
 /// <summary>
 /// This job is meant to pack booleans into <see cref="indices"/>.
@@ -284,7 +139,7 @@ public unsafe struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, ICondit
 		this.counts = counts;
 		bitsPtr = (BitField64*)indices.GetUnsafeReadOnlyPtr();
 	}
-
+	
 	public void Execute(int index)
 	{
 		//parallelCopyJobMarker.Begin();

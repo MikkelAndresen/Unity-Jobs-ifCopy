@@ -14,17 +14,17 @@ namespace Tests
 	{	
 		private struct GreaterThanZeroDel : IValidator<float>
 		{
-			public bool Validate(float element) => element > 0;
+			public bool Validate(int index, float element) => element > 0;
 		}
 
 		private struct ValidateTrue : IValidator<float>
 		{
-			public bool Validate(float element) => true;
+			public bool Validate(int index, float element) => true;
 		}
 
 		private struct ValidateFalse : IValidator<float>
 		{
-			public bool Validate(float element) => false;
+			public bool Validate(int index, float element) => false;
 		}
 
 		[Test]
@@ -127,7 +127,7 @@ namespace Tests
 			int j = 0;
 			for (int i = 0; i < expected.Length; i++)
 			{
-				if (comparer != null && !comparer.Validate(data[i])) continue;
+				if (comparer != null && !comparer.Validate(i, data[i])) continue;
 				expected[j] = data[i];
 				j++;
 			}
