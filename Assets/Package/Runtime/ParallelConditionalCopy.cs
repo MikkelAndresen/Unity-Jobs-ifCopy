@@ -38,7 +38,7 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 		
 		for (int i = 0; i < 64; i++)
 		{
-			bool v = del.Validate(src[dataIndex + i]);
+			bool v = del.Validate(dataIndex + i, src[dataIndex + i]);
 			// This one seems to generate less instructions, but not vectorized. The performance was the same as the line below however.
 			bits.SetBits(i, v);
 			// This generates more vectorized instructions with the same performance, I'm guessing the power cost is higher for this line though.
@@ -75,7 +75,7 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 			bits.Clear();
 
 			for (int i = 0; i < remainderCount; i++)
-				bits.SetBits(i, del.Validate(src[dataStartIndex + i]));
+				bits.SetBits(i, del.Validate(dataStartIndex + i, src[dataStartIndex + i]));
 
 			counts[indices.Length - 1] = math.countbits(bits.Value);
 			indices[indices.Length - 1] = bits;
@@ -138,6 +138,16 @@ public unsafe struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, ICondit
 		this.writer = writer;
 		this.counts = counts;
 		bitsPtr = (BitField64*)indices.GetUnsafeReadOnlyPtr();
+	}
+	
+	public ParallelConditionalCopyJob(
+		W writer,
+		BitField64* indices,
+		NativeArray<int> counts)
+	{
+		this.writer = writer;
+		this.counts = counts;
+		bitsPtr = indices;
 	}
 	
 	public void Execute(int index)
