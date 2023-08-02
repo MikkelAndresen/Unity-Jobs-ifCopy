@@ -122,14 +122,12 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 }
 
 [BurstCompile, GenerateTestsForBurstCompatibility]
-public unsafe struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCopyJob<T, W> where T : unmanaged where W : struct, IIndexWriter<T>
+public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCopyJob<T, W> where T : unmanaged where W : struct, IIndexWriter<T>
 {
 	public W writer;
 	[ReadOnly] public NativeArray<int> counts;
-
-	[NativeDisableUnsafePtrRestriction, ReadOnly]
-	private readonly BitField64* bitsPtr;
-
+	[ReadOnly] private NativeArray<BitField64> indices;
+	
 	public ParallelConditionalCopyJob(
 		W writer,
 		NativeArray<BitField64> indices,
@@ -137,17 +135,7 @@ public unsafe struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, ICondit
 	{
 		this.writer = writer;
 		this.counts = counts;
-		bitsPtr = (BitField64*)indices.GetUnsafeReadOnlyPtr();
-	}
-	
-	public ParallelConditionalCopyJob(
-		W writer,
-		BitField64* indices,
-		NativeArray<int> counts)
-	{
-		this.writer = writer;
-		this.counts = counts;
-		bitsPtr = indices;
+		this.indices = indices;
 	}
 	
 	public void Execute(int index)
@@ -158,7 +146,7 @@ public unsafe struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, ICondit
 		int dstStartIndex = index == 0 ? 0 : counts[math.max(0, index - 1)];
 
 		int srcStartIndex = index * 64;
-		ulong n = bitsPtr[index].Value;
+		ulong n = indices[index].Value;
 		
 		int i = 0;
 		int t = 0;
