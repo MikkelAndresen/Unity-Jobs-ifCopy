@@ -21,11 +21,35 @@ public static class NativeCollectionExtensions
 		public int indexingBatchCount;
 		public int writeBatchCount;
 		public V validator;
+
+		private int lastCount;
+
 		/// <summary>
 		/// Returns the value of the <see cref="NativeReference{T}"/> counter used when the <see cref="IfCopyToParallel"/> function is run.
 		/// Returns zero if nothing was copied or the function was never run.
+		/// This property is a bit special because when you access it, it also disposes the temp native reference counter.
+		/// The value of the disposed counter is cached.
+		/// You can also dispose of the temp memory using <see cref="ReleaseTempMemory"/>
 		/// </summary>
-		public int CountCopied => counter.IsCreated ? counter.Value : 0;
+		public int CountCopied
+		{
+			get
+			{
+				if (!counter.IsCreated) return lastCount;
+				lastCount = counter.Value;
+				counter.Dispose();
+				return lastCount;
+			}
+		}
+
+		public void ReleaseTempMemory()
+		{
+			if (!counter.IsCreated)
+				return;
+			lastCount = counter.Value;
+			counter.Dispose();
+		}
+
 		private NativeArray<BitField64> indices;
 		private NativeArray<int> counts;
 		private NativeReference<int> counter;
