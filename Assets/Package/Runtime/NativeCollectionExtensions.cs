@@ -10,10 +10,11 @@ public static class NativeCollectionExtensions
 {
 	/// <summary>
 	/// This class exists to make it easier to use the <see cref="IfCopyToParallel"/> function without having to manually allocated both the indices and counts arrays.
+	/// Whenever you call either of the copy methods, a temp <see cref="NativeReference{T}"/> will be allocated. In order to release it you need to also call either <see cref="ReleaseTempMemory"/> or <see cref="CountCopied"/>.
 	/// </summary>
 	/// <typeparam name="T"></typeparam>
 	/// <typeparam name="V"></typeparam>
-	public class CopyHandler<T, V> : IDisposable where T : unmanaged where V : unmanaged, IValidator<T>
+	public unsafe class CopyHandler<T, V> : IDisposable where T : unmanaged where V : unmanaged, IValidator<T>
 	{
 		public NativeArray<T> src;
 		public NativeArray<T> dst;
@@ -28,15 +29,18 @@ public static class NativeCollectionExtensions
 		private NativeArray<BitField64> indices;
 		private NativeArray<int> counts;
 		private NativeReference<int> counter;
+		private readonly T* srcReadOnlyPtr;
 
 		public CopyHandler(
-			NativeArray<T> src,
+			int srcLength,
 			NativeArray<T> dst,
 			int indexingBatchCount = 64,
 			int writeBatchCount = 64,
 			V validator = default)
 		{
-			this.src = src;
+			src = new NativeArray<T>(srcLength, Allocator.Persistent);
+			srcReadOnlyPtr = (T*)src.GetUnsafeReadOnlyPtr();
+
 			this.dst = dst;
 			this.indexingBatchCount = indexingBatchCount;
 			this.writeBatchCount = writeBatchCount;
@@ -47,12 +51,12 @@ public static class NativeCollectionExtensions
 			counts = new NativeArray<int>(indicesLength, Allocator.Persistent);
 		}
 
-		public JobHandle IfCopyToParallel(JobHandle dependsOn) => src.IfCopyToParallel(dst, out counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
+		public JobHandle IfCopyToParallel(JobHandle dependsOn = default) => src.IfCopyToParallel(dst, out counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
+		public JobHandle IfCopyToParallelUnsafe(T* dstReadOnlyPtr, JobHandle dependsOn = default) => src.IfCopyToParallel(dst, srcReadOnlyPtr, dstReadOnlyPtr, out counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
 
 		public void Dispose()
 		{
 			src.Dispose();
-			dst.Dispose();
 			indices.Dispose();
 			counts.Dispose();
 			if (counter.IsCreated)
@@ -77,7 +81,24 @@ public static class NativeCollectionExtensions
 	/// <typeparam name="T"></typeparam>
 	/// <typeparam name="V"></typeparam>
 	/// <returns></returns>
-	public unsafe static JobHandle IfCopyToParallel<T, V>(this NativeArray<T> src, NativeArray<T> dst,
+	public unsafe static JobHandle IfCopyToParallel<T, V>(
+		this NativeArray<T> src,
+		NativeArray<T> dst,
+		out NativeReference<int> counter,
+		int indexingBatchCount = 64,
+		int writeBatchCount = 64,
+		JobHandle dependsOn = default,
+		NativeArray<BitField64> indices = default,
+		NativeArray<int> counts = default,
+		V validator = default) where T : unmanaged where V : unmanaged, IValidator<T> => IfCopyToParallel(
+		src, dst, (T*)src.GetUnsafeReadOnlyPtr(), (T*)dst.GetUnsafeReadOnlyPtr(),
+		out counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
+
+	public unsafe static JobHandle IfCopyToParallel<T, V>(
+		this NativeArray<T> src,
+		NativeArray<T> dst,
+		T* srcReadOnlyPtr,
+		T* dstReadOnlyPtr,
 		out NativeReference<int> counter,
 		int indexingBatchCount = 64,
 		int writeBatchCount = 64,
@@ -86,22 +107,19 @@ public static class NativeCollectionExtensions
 		NativeArray<int> counts = default,
 		V validator = default) where T : unmanaged where V : unmanaged, IValidator<T>
 	{
-		GenericWriter<T> writer = new GenericWriter<T>(src, dst);
 		Assert.IsTrue(dst.Length >= src.Length, "Assert Failed: dst.Length < src.Length");
 		int indicesLength = (int)math.ceil(src.Length / 64f);
 
 		bool tempBits = indices.IsCreated;
 		var tempIndicesArray = tempBits ? new NativeArray<BitField64>(indicesLength, Allocator.TempJob) : default;
-		// We get the pointer here to avoid possible job dependency conflicts, if we get the pointer later the safety system will complain.
-		var indicesRead = (BitField64*)tempIndicesArray.GetUnsafeReadOnlyPtr();
-		// var indicesWrite = (BitField64*)tempIndicesArray.GetUnsafePtr();
 
 		bool tempCounts = !counts.IsCreated;
 		if (tempCounts)
 			counts = new NativeArray<int>(src.Length, Allocator.TempJob);
 		counter = new NativeReference<int>(0, Allocator.TempJob);
 
-		ParallelConditionalCopyJob<T, GenericWriter<T>> copyJob = new ParallelConditionalCopyJob<T, GenericWriter<T>>(writer, indicesRead, counts);
+		GenericWriter<T> writer = new GenericWriter<T>(src, dst, srcReadOnlyPtr, dstReadOnlyPtr);
+		ParallelConditionalCopyJob<T, GenericWriter<T>> copyJob = new ParallelConditionalCopyJob<T, GenericWriter<T>>(writer, indices, counts);
 
 		var handle = ParallelIndexingSumJob<T, V>.Schedule(src, indices, counts, counter, indexingBatchCount, dependsOn, validator);
 		handle = copyJob.Schedule(indicesLength, writeBatchCount, handle);
