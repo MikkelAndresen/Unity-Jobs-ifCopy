@@ -104,9 +104,7 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 		int remainder = src.Length % 64;
 		// The job only supports writing whole 64 bit batches, so we floor here and then run the remainder elsewhere
 		int length = (int)math.floor(src.Length / 64f);
-		var job = new ParallelIndexingSumJob<T, V>(src, indices, counts);
-
-		var handle = job.Schedule(length, innerBatchCount, dependsOn);
+		var handle = new ParallelIndexingSumJob<T, V>(src, indices, counts, del).Schedule(length, innerBatchCount, dependsOn);
 		if (remainder > 0)
 			handle = new RemainderSumJob
 			{
