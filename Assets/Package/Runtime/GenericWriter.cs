@@ -2,6 +2,9 @@ using System.Runtime.CompilerServices;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
+#if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
+using Unity.Burst.Intrinsics;
+#endif
 
 [GenerateTestsForBurstCompatibility, BurstCompile]
 public unsafe struct GenericWriter<T> : IIndexWriter<T> where T : unmanaged

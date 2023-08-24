@@ -140,6 +140,6 @@ public class CopyTestBehaviour : MonoBehaviour
 	
 	public struct GreaterThanZeroDel : IValidator<float3x4>
 	{
-		public bool Validate(float3x4 element) => element.c0.x > 0;
+		public bool Validate(int index, float3x4 element) => element.c0.x > 0;
 	}
 }
