@@ -50,34 +50,57 @@ public static class NativeCollectionExtensions
 			counter.Dispose();
 		}
 
-		private NativeArray<BitField64> indices;
-		private NativeArray<int> counts;
+		private NativeList<BitField64> indices;
+		private NativeList<int> counts;
 		private NativeReference<int> counter;
 		private readonly T* srcReadOnlyPtr;
 
 		public CopyHandler(
-			int srcLength,
+			NativeArray<T> src,
 			NativeArray<T> dst,
 			int indexingBatchCount = 64,
 			int writeBatchCount = 64,
 			V validator = default)
 		{
-			src = new NativeArray<T>(srcLength, Allocator.Persistent);
+			this.src = src;
 			srcReadOnlyPtr = (T*)src.GetUnsafeReadOnlyPtr();
 
 			this.dst = dst;
 			this.indexingBatchCount = indexingBatchCount;
 			this.writeBatchCount = writeBatchCount;
 			this.validator = validator;
-			int indicesLength = (int)math.ceil(src.Length / 64f);
 
-			indices = new NativeArray<BitField64>(indicesLength, Allocator.Persistent);
-			counts = new NativeArray<int>(indicesLength, Allocator.Persistent);
+			ReallocatedArraysIfNecessary();
 		}
 
-		public JobHandle IfCopyToParallel(JobHandle dependsOn = default) => src.IfCopyToParallel(dst, out counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
-		public JobHandle IfCopyToParallelUnsafe(T* dstReadOnlyPtr, JobHandle dependsOn = default) => src.IfCopyToParallel(dst, srcReadOnlyPtr, dstReadOnlyPtr, out counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
+		public JobHandle IfCopyToParallel(JobHandle dependsOn = default)
+		{
+			ReallocatedArraysIfNecessary();
+			return src.IfCopyToParallel(dst, out counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
+		}
 
+		public JobHandle IfCopyToParallelUnsafe(T* dstReadOnlyPtr, JobHandle dependsOn = default)
+		{
+			ReallocatedArraysIfNecessary();
+			return src.IfCopyToParallel(dst, srcReadOnlyPtr, dstReadOnlyPtr, out counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
+		}
+
+		private void ReallocatedArraysIfNecessary()
+		{
+			int desiredLength = (int)math.ceil(src.Length / 64f);
+			
+			if (!indices.IsCreated)
+			{
+				indices = new NativeList<BitField64>(desiredLength, Allocator.Persistent);
+				counts = new NativeList<int>(desiredLength, Allocator.Persistent);
+			}
+			else
+			{
+				indices.Resize(desiredLength, NativeArrayOptions.UninitializedMemory);
+				counts.Resize(desiredLength, NativeArrayOptions.UninitializedMemory);
+			}
+		}
+		
 		public void Dispose()
 		{
 			src.Dispose();
@@ -174,7 +197,11 @@ public static class NativeCollectionExtensions
 
 		return handle;
 	}
-
+	
+	public unsafe static NativeArray<T> AsArray<T>(this NativeSlice<T> slice) where T : unmanaged =>
+		NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<T>(slice.GetUnsafePtr(), slice.Length,
+			Allocator.Invalid);
+	
 	private struct AssignJobLengthJob<T> : IJob where T : unmanaged
 	{
 		public NativeList<T> dst;
