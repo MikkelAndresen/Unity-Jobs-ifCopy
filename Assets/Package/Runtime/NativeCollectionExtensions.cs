@@ -76,13 +76,13 @@ public static class NativeCollectionExtensions
 		public JobHandle IfCopyToParallel(JobHandle dependsOn = default)
 		{
 			ReallocatedArraysIfNecessary();
-			return src.IfCopyToParallel(dst, out counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
+			return src.IfCopyToParallel(dst, out counter, indexingBatchCount, writeBatchCount, dependsOn, indices.AsArray(), counts.AsArray(), validator);
 		}
 
 		public JobHandle IfCopyToParallelUnsafe(T* dstReadOnlyPtr, JobHandle dependsOn = default)
 		{
 			ReallocatedArraysIfNecessary();
-			return src.IfCopyToParallel(dst, srcReadOnlyPtr, dstReadOnlyPtr, out counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
+			return src.IfCopyToParallel(dst, srcReadOnlyPtr, dstReadOnlyPtr, out counter, indexingBatchCount, writeBatchCount, dependsOn, indices.AsArray(), counts.AsArray(), validator);
 		}
 
 		private void ReallocatedArraysIfNecessary()
@@ -157,22 +157,21 @@ public static class NativeCollectionExtensions
 		Assert.IsTrue(dst.Length >= src.Length, "Assert Failed: dst.Length < src.Length");
 		int indicesLength = (int)math.ceil(src.Length / 64f);
 
-		bool tempBits = indices.IsCreated;
-		var tempIndicesArray = tempBits ? new NativeArray<BitField64>(indicesLength, Allocator.TempJob) : default;
+		bool tempBits = !indices.IsCreated;
+		indices = tempBits ? new NativeArray<BitField64>(indicesLength, Allocator.TempJob) : indices;
 
 		bool tempCounts = !counts.IsCreated;
-		if (tempCounts)
-			counts = new NativeArray<int>(src.Length, Allocator.TempJob);
+		counts = tempCounts ? new NativeArray<int>(src.Length, Allocator.TempJob) : counts;
 		counter = new NativeReference<int>(0, Allocator.TempJob);
 
-		GenericWriter<T> writer = new GenericWriter<T>(src, dst, srcReadOnlyPtr, dstReadOnlyPtr);
-		ParallelConditionalCopyJob<T, GenericWriter<T>> copyJob = new ParallelConditionalCopyJob<T, GenericWriter<T>>(writer, indices, counts);
+		DataRW<T> writer = new DataRW<T>(src, dst, srcReadOnlyPtr, dstReadOnlyPtr);
+		ParallelConditionalCopyJob<T, DataRW<T>> copyJob = new ParallelConditionalCopyJob<T, DataRW<T>>(writer, indices, counts);
 
 		var handle = ParallelIndexingSumJob<T, V>.Schedule(src, indices, counts, counter, indexingBatchCount, dependsOn, validator);
 		handle = copyJob.Schedule(indicesLength, writeBatchCount, handle);
 
-		if (tempIndicesArray.IsCreated)
-			tempIndicesArray.Dispose(handle);
+		if (tempBits)
+			indices.Dispose(handle);
 		if (tempCounts)
 			counts.Dispose(handle);
 
@@ -190,7 +189,7 @@ public static class NativeCollectionExtensions
 		Assert.IsTrue(dst.Capacity >= src.Length, "Assert Failed: dst.Capacity < src.Length");
 		dst.ResizeUninitialized(dst.Capacity);
 
-		var handle = src.IfCopyToParallel<T, V>(dst.AsArray(), out var counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
+		var handle = src.IfCopyToParallel(dst.AsArray(), out var counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
 		// Set length to the counted length instead of capacity
 		handle = new AssignJobLengthJob<T>() { dst = dst, count = counter }.Schedule(handle);
 		counter.Dispose(handle);

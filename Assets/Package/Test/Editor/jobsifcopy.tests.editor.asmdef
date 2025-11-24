@@ -5,7 +5,6 @@
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner",
         "Unity.Collections",
-        "Unity.Jobs",
         "Unity.Burst",
         "no.msa.jobsifcopy",
         "Unity.Mathematics"

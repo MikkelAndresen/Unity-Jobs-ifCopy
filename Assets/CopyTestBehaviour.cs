@@ -26,7 +26,7 @@ public class CopyTestBehaviour : MonoBehaviour
 	private JobHandle handle;
 
 	private static readonly ProfilerMarker indexingSumJobMarker = new ProfilerMarker(nameof(ParallelIndexingSumJob<float3x4, GreaterThanZeroDel>));
-	private static readonly ProfilerMarker parallelCopyJobMarker = new ProfilerMarker(nameof(ParallelConditionalCopyJob<float3x4, GenericWriter<float3x4>>));
+	private static readonly ProfilerMarker parallelCopyJobMarker = new ProfilerMarker(nameof(ParallelConditionalCopyJob<float3x4, DataRW<float3x4>>));
 
 	void Start()
 	{
@@ -55,6 +55,7 @@ public class CopyTestBehaviour : MonoBehaviour
 				handle = src.IfCopyToParallel<float3x4, GreaterThanZeroDel>(dst, out tempCounter, indexingBatchCount, writeBatchCount, default,
 					useScheduleUtilityPreAllocatedCollections ? indices : default,
 					useScheduleUtilityPreAllocatedCollections ? counts : default);
+				tempCounter.Dispose(handle);
 			}
 			else // List
 			{
@@ -69,10 +70,10 @@ public class CopyTestBehaviour : MonoBehaviour
 		else
 		{
 			var writer = useGPUBuffer ? 
-				new GenericWriter<float3x4>(src, gpuBuffer.BeginWrite<float3x4>(0, dataLength)) : 
-				new GenericWriter<float3x4>(src, dstData);
+				new DataRW<float3x4>(src, gpuBuffer.BeginWrite<float3x4>(0, dataLength)) : 
+				new DataRW<float3x4>(src, dstData.AsArray());
 			
-			var copyJob = new ParallelConditionalCopyJob<float3x4, GenericWriter<float3x4>>(writer, indices, counts);
+			var copyJob = new ParallelConditionalCopyJob<float3x4, DataRW<float3x4>>(writer, indices, counts);
 
 			indexingSumJobMarker.Begin();
 			handle = ParallelIndexingSumJob<float3x4, GreaterThanZeroDel>.Schedule(src, indices, counts, counter, indexingBatchCount);

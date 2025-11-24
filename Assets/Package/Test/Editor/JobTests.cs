@@ -34,7 +34,7 @@ namespace Tests
 			
 			for (int i = 0; i < src.Length; i++)
 				src[i] = i;
-			GenericWriter<float> writer = new GenericWriter<float>(src, dst);
+			DataRW<float> writer = new DataRW<float>(src, dst);
 			writer.Write(2,2,7);
 			for (int i = 0; i < 11; i++)
 				Assert.AreEqual( i is >= 2 and < 9 ? i : 0, dst[i]);

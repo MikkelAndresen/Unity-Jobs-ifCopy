@@ -1,6 +1,6 @@
+using System;
 using Unity.Burst;
 using Unity.Collections;
-using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Mathematics;
 
@@ -11,7 +11,7 @@ using Unity.Mathematics;
 /// </summary>
 /// <typeparam name="T"></typeparam>
 /// <typeparam name="V"></typeparam>
-[BurstCompile, GenerateTestsForBurstCompatibility]
+[BurstCompile(CompileSynchronously = true), GenerateTestsForBurstCompatibility]
 public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexingJob<T, V> where T : unmanaged where V : IValidator<T>
 {
 	[ReadOnly] public V del;
@@ -56,7 +56,7 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 	/// This job sets the bits and sums the last element of <see cref="indices"/>.
 	/// It also will count all the bits at the end and store the count so far in <see cref="counts"/>.
 	/// </summary>
-	[BurstCompile, GenerateTestsForBurstCompatibility]
+	[BurstCompile(CompileSynchronously = true), GenerateTestsForBurstCompatibility]
 	private struct RemainderSumJob : IJob
 	{
 		[ReadOnly] public V del;
@@ -119,32 +119,31 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 	}
 }
 
-[BurstCompile, GenerateTestsForBurstCompatibility]
-public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCopyJob<T, W> where T : unmanaged where W : struct, IIndexWriter<T>
+[BurstCompile(CompileSynchronously = true), GenerateTestsForBurstCompatibility]
+public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCopyJob<T, W> where T : unmanaged where W : struct, IIndexWriter<T>, IIndexReader<T>
 {
-	public W writer;
+	public W data;
 	[ReadOnly] public NativeArray<int> counts;
 	[ReadOnly] private NativeArray<BitField64> indices;
 	
 	public ParallelConditionalCopyJob(
-		W writer,
+		W data,
 		NativeArray<BitField64> indices,
 		NativeArray<int> counts)
 	{
-		this.writer = writer;
+		this.data = data;
 		this.counts = counts;
 		this.indices = indices;
 	}
 	
-	public void Execute(int index)
+	public unsafe void Execute(int index)
 	{
-		//parallelCopyJobMarker.Begin();
-
 		// We need to start write index of the src data which we can get from counts
 		int dstStartIndex = index == 0 ? 0 : counts[math.max(0, index - 1)];
-
+		
 		int srcStartIndex = index * 64;
 		ulong n = indices[index].Value;
+		Span<T> temp = stackalloc T[math.countbits(n)];
 		
 		int i = 0;
 		int t = 0;
@@ -152,21 +151,10 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 		{
 			int tzcnt = math.tzcnt(n);
 			t += tzcnt;
-			writer.Write(dstStartIndex + i, srcStartIndex + t + i);
+			temp[i] = data.Read(srcStartIndex + t + i);
 			i++;
 			n >>= tzcnt + 1;
 		}
-		
-		// The following code is slightly slower than the above code
-		// int total_set_bits = math.countbits(n);
-		// for (int i = 0, bitIndex = 0; i < total_set_bits; ++bitIndex)
-		// {
-		// 	if ((n & (1UL << bitIndex)) != 0)
-		// 	{
-		// 		writer.Write(dstStartIndex + i, srcStartIndex + bitIndex);
-		// 		++i;
-		// 	}
-		// }
-		//parallelCopyJobMarker.End();
+		data.Write(dstStartIndex, temp, i);
 	}
 }
