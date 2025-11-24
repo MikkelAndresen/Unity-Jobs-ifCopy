@@ -1,15 +1,21 @@
+using System;
 using UnityEngine;
 using System.Text;
+using Cysharp.Text;
 using TMPro;
+using UnityEngine.Profiling;
 
 [RequireComponent(typeof(TextMeshPro))]
 public class DeltaTimeTxt : MonoBehaviour
 {
-	private readonly StringBuilder sb = new StringBuilder(25);
+	private Utf16ValueStringBuilder sb;
+	private readonly char[] str;
+	// private readonly StringBuilder sb = new (100);
 	private TextMeshPro txt;
 
 	private void Start()
 	{
+		sb = ZString.CreateStringBuilder(true);
 		txt = GetComponent<TextMeshPro>();
 	}
 
@@ -17,6 +23,9 @@ public class DeltaTimeTxt : MonoBehaviour
 	{
 		sb.Clear();
 		sb.Append(Time.deltaTime);
-		txt.text = sb.ToString();
+		sb.TryCopyTo(str, out int count);
+		txt.SetText(str, 0, count);
 	}
+
+	private void OnDestroy() => sb.Dispose();
 }
