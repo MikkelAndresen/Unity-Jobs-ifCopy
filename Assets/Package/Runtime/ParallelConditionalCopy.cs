@@ -119,6 +119,12 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 	}
 }
 
+/// <summary>
+/// Runs the read interface for each set bit of each element in the indices array and collects them in a temporary <see cref="Span{T}"/>.
+/// Then runs the write interface a single time using the <see cref="Span{T}"/>.
+/// </summary>
+/// <typeparam name="T"></typeparam>
+/// <typeparam name="W"></typeparam>
 [BurstCompile(CompileSynchronously = true), GenerateTestsForBurstCompatibility]
 public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCopyJob<T, W> where T : unmanaged where W : struct, IIndexWriter<T>, IIndexReader<T>
 {

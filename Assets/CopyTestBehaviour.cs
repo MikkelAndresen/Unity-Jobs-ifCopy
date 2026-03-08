@@ -5,6 +5,9 @@ using Unity.Jobs;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Profiling;
 
+/// <summary>
+/// This class can be used to run the code in update to see prolonged performance in the profiler.
+/// </summary>
 public class CopyTestBehaviour : MonoBehaviour
 {
 	[SerializeField] private int dataLength = 100;
@@ -28,7 +31,7 @@ public class CopyTestBehaviour : MonoBehaviour
 	private static readonly ProfilerMarker indexingSumJobMarker = new ProfilerMarker(nameof(ParallelIndexingSumJob<float3x4, GreaterThanZeroDel>));
 	private static readonly ProfilerMarker parallelCopyJobMarker = new ProfilerMarker(nameof(ParallelConditionalCopyJob<float3x4, DataRW<float3x4>>));
 
-	void Start()
+	private void Start()
 	{
 		src = new NativeArray<float3x4>(dataLength, Allocator.Persistent);
 		indices = new NativeArray<BitField64>((int)math.ceil(dataLength / 64f), Allocator.Persistent);
