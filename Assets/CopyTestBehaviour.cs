@@ -1,3 +1,4 @@
+using Unity.Burst;
 using UnityEngine;
 using Unity.Mathematics;
 using Unity.Collections;
@@ -25,8 +26,12 @@ public class CopyTestBehaviour : MonoBehaviour
 	private ComputeBuffer gpuBuffer;
 	private JobHandle handle;
 
-	private static readonly ProfilerMarker indexingSumJobMarker = new ProfilerMarker(nameof(ParallelIndexingSumJob<float3x4, GreaterThanZeroDel>));
-	private static readonly ProfilerMarker parallelCopyJobMarker = new ProfilerMarker(nameof(ParallelConditionalCopyJob<float3x4, DataRW<float3x4>>));
+	private static readonly ProfilerMarker indexingSumJobMarker =
+		new (nameof(ParallelIndexingSumJob<float3x4, GreaterThanZeroDel>));
+	private static readonly ProfilerMarker parallelCopyJobMarker =
+		new (nameof(ParallelConditionalCopyJob<float3x4, DataRW<float3x4>>));
+	private static readonly ProfilerMarker basicCopyJobMarker =
+		new (nameof(CopyJob<float3x4>));
 
 	void Start()
 	{
@@ -46,6 +51,12 @@ public class CopyTestBehaviour : MonoBehaviour
 	private void Update()
 	{
 		counter.Value = 0;
+
+		basicCopyJobMarker.Begin();
+		dstData.Resize(src.Length, NativeArrayOptions.UninitializedMemory);
+		new CopyJob<float3x4>() { src = src, dst = dstData.AsArray() }.Schedule().Complete();
+		basicCopyJobMarker.End();
+		dstData.Resize(0, NativeArrayOptions.UninitializedMemory);
 		
 		if (useScheduleUtility)
 		{
@@ -142,5 +153,14 @@ public class CopyTestBehaviour : MonoBehaviour
 	public struct GreaterThanZeroDel : IValidator<float3x4>
 	{
 		public bool Validate(int index, float3x4 element) => element.c0.x > 0;
+	}
+
+	[BurstCompile(CompileSynchronously = true)]
+	private struct CopyJob<T> : IJob where T : unmanaged
+	{
+		[ReadOnly] public NativeArray<T> src;
+		[WriteOnly] public NativeArray<T> dst;
+
+		public void Execute() => src.CopyTo(dst);
 	}
 }

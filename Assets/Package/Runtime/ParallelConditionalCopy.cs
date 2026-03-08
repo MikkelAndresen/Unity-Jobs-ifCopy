@@ -1,5 +1,6 @@
 using System;
 using Unity.Burst;
+using Unity.Burst.CompilerServices;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
@@ -136,14 +137,28 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 		this.indices = indices;
 	}
 	
+	[SkipLocalsInit]
 	public unsafe void Execute(int index)
 	{
+		Hint.Assume(counts.Length > 0);
+		Hint.Assume(indices.Length > 0);
+		
 		// We need to start write index of the src data which we can get from counts
 		int dstStartIndex = index == 0 ? 0 : counts[math.max(0, index - 1)];
-		
 		int srcStartIndex = index * 64;
+		Hint.Assume(dstStartIndex >= 0);
+		Hint.Assume(srcStartIndex >= 0);
+
 		ulong n = indices[index].Value;
-		Span<T> temp = stackalloc T[math.countbits(n)];
+		var count = math.countbits(n);
+		Hint.Assume(count >= 0);
+		
+		Span<T> temp = stackalloc T[count];
+		
+#if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
+		data.PrefetchSrc(srcStartIndex);
+		data.PrefetchDst(dstStartIndex);
+#endif
 		
 		int i = 0;
 		int t = 0;
