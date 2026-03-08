@@ -1,7 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
 using Unity.Burst;
-using Unity.Burst.CompilerServices;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 #if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
@@ -40,62 +39,41 @@ public unsafe struct DataRW<T> : IIndexWriter<T>, IIndexReader<T> where T : unma
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public T Read([AssumeRange(0, int.MaxValue)] int index)
-	{
-		Hint.Assume(src.Length > 0);
-		return src[index];
-	}
+	public T Read(int index) => src[index];
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public void Write([AssumeRange(0, int.MaxValue)] int startIndex, in ReadOnlySpan<T> values,
-		[AssumeRange(0, int.MaxValue)] int length)
+	public void Write(int startIndex, in ReadOnlySpan<T> values, int length)
 	{
-		Hint.Assume(src.Length > 0);
-		Hint.Assume(dst.Length > 0);
-
 #if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
 		PrefetchSrc(startIndex);
 #endif
-
 		fixed (T* ptr = values)
 			UnsafeUtility.MemCpy(dstPtr + startIndex, ptr, length * Stride);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public void Write([AssumeRange(0, int.MaxValue)] int dstIndex, [AssumeRange(0, int.MaxValue)] int srcIndex)
-	{
-		Hint.Assume(src.Length > 0);
-		Hint.Assume(dst.Length > 0);
-
-		dst[dstIndex] = src[srcIndex];
-	}
+	public void Write(int dstIndex, int srcIndex) => dst[dstIndex] = src[srcIndex];
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public void Write([AssumeRange(0, int.MaxValue)] int dstIndex, [AssumeRange(0, int.MaxValue)] int srcIndex,
-		[AssumeRange(0, int.MaxValue)] int srcRange)
+	public void Write(int dstIndex, int srcIndex, int srcRange)
 	{
-		Hint.Assume(src.Length > 0);
-		Hint.Assume(dst.Length > 0);
-
 		for (int i = 0; i < srcRange; i++)
 			dstPtr[dstIndex + i] = srcPtr[srcIndex + i];
 	}
 
 #if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public readonly void Prefetch([AssumeRange(0, int.MaxValue)] int dstIndex,
-		[AssumeRange(0, int.MaxValue)] int srcIndex)
+	public readonly void Prefetch(int dstIndex, int srcIndex)
 	{
 		PrefetchDst(dstIndex);
 		PrefetchSrc(srcIndex);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public readonly void PrefetchSrc([AssumeRange(0, int.MaxValue)] int index) =>
+	public readonly void PrefetchSrc(int index) => 
 		Common.Prefetch(srcPtr + index, Common.ReadWrite.Read, Common.Locality.LowTemporalLocality);
-
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public readonly void PrefetchDst([AssumeRange(0, int.MaxValue)] int index) =>
+	public readonly void PrefetchDst(int index) => 
 		Common.Prefetch(dstPtr + index, Common.ReadWrite.Write, Common.Locality.HighTemporalLocality);
 #endif
 }
