@@ -347,7 +347,7 @@ MonoBehaviour:
   completeInLateUpdate: 0
   useScheduleUtility: 1
   useScheduleUtilityPreAllocatedCollections: 1
-  dataGenMethod: 3
+  dataGenMethod: 1
   runAndMeasureBasicCopyJob: 1
   runAndMeasureConditionalCopyJob: 0
   runAndMeasureFilterJob: 1

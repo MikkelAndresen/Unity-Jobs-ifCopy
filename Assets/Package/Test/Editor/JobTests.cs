@@ -52,6 +52,21 @@ namespace Tests
 		public void TestCopyAllOddBits() => TestBothSingleAndParallelCopyJobs<GreaterThanZeroDel>((i) => i % 2 == 0 ? -1f : 1);
 
 		[Test]
+		public void RunLengthTest()
+		{
+			// runLength = math.tzcnt(~(n >> tzcnt))
+			ulong threeAtOffset0 = 0b111UL;
+			ulong threeAtOffset2 = 0b11100UL;
+			ulong singleBitAtOffset1 = 0b10UL;
+			ulong allBitsSet = ulong.MaxValue;
+
+			Assert.AreEqual(3,  math.tzcnt(~(threeAtOffset0    >> 0)));
+			Assert.AreEqual(3,  math.tzcnt(~(threeAtOffset2    >> 2)));
+			Assert.AreEqual(1,  math.tzcnt(~(singleBitAtOffset1 >> 1)));
+			Assert.AreEqual(64, math.tzcnt(~(allBitsSet         >> 0)));
+		}
+		
+		[Test]
 		public void TestCopyAllBatchedBits()
 		{
 			int j = 0;

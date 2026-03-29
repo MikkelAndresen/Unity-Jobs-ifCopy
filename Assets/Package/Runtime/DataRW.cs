@@ -23,9 +23,11 @@ public unsafe struct DataRW<T> : IIndexWriter<T>, IIndexReader<T> where T : unma
 	[WriteOnly, NativeDisableUnsafePtrRestriction]
 	private readonly T* dstPtr;
 
-	[ReadOnly] private static readonly int Stride;
-	static DataRW() => Stride = UnsafeUtility.SizeOf<T>();
+	[ReadOnly] private static readonly int stride;
+	static DataRW() => stride = UnsafeUtility.SizeOf<T>();
 
+	public int Stride => stride;
+	
 	public DataRW(NativeArray<T> src, NativeArray<T> dst) : this(src, dst, (T*)src.GetUnsafeReadOnlyPtr(),
 		(T*)dst.GetUnsafeReadOnlyPtr())
 	{
@@ -46,6 +48,15 @@ public unsafe struct DataRW<T> : IIndexWriter<T>, IIndexReader<T> where T : unma
 		return src[index];
 	}
 
+	public NativeSlice<T> Read(int startIndex, int count) => src.Slice(startIndex, count);
+
+	public void CopyTo(int startIndex, int count, Span<T> other)
+	{
+		fixed(T* ptr = other)
+			UnsafeUtility.MemCpy(ptr, srcPtr + startIndex, Stride * count);
+	}
+	// public Span<T> ReadAsSpan(int startIndex, int count) => src.AsSpan().Slice(startIndex, count);
+	
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	public void Write([AssumeRange(0, int.MaxValue)] int startIndex, in ReadOnlySpan<T> values,
 		[AssumeRange(0, int.MaxValue)] int length)
@@ -59,7 +70,7 @@ public unsafe struct DataRW<T> : IIndexWriter<T>, IIndexReader<T> where T : unma
 #endif
 
 		fixed (T* ptr = values)
-			UnsafeUtility.MemCpy(dstPtr + startIndex, ptr, length * Stride);
+			UnsafeUtility.MemCpy(dstPtr + startIndex, ptr, length * stride);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -78,8 +89,15 @@ public unsafe struct DataRW<T> : IIndexWriter<T>, IIndexReader<T> where T : unma
 		Hint.Assume(src.Length > 0);
 		Hint.Assume(dst.Length > 0);
 
-		for (int i = 0; i < srcRange; i++)
-			dstPtr[dstIndex + i] = srcPtr[srcIndex + i];
+		
+#if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
+		PrefetchSrc(srcIndex + srcRange);
+		PrefetchDst(dstIndex + srcRange);
+#endif
+		// for (int i = 0; i < srcRange; i++)
+		// 	dstPtr[dstIndex + i] = srcPtr[srcIndex + i];
+
+		UnsafeUtility.MemCpy(dstPtr + dstIndex, srcPtr + srcIndex, srcRange * stride);
 	}
 
 #if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
