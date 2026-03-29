@@ -1,3 +1,4 @@
+using Unity.Burst;
 using UnityEngine;
 using Unity.Mathematics;
 using Unity.Collections;
@@ -18,6 +19,9 @@ public class CopyTestBehaviour : MonoBehaviour
 	[SerializeField] private bool useScheduleUtility;
 	[SerializeField] private bool useScheduleUtilityPreAllocatedCollections;
 	[SerializeField] private TestDataType dataGenMethod = TestDataType.Odd;
+	[SerializeField] private bool runAndMeasureBasicCopyJob;
+	[SerializeField] private bool runAndMeasureConditionalCopyJob;
+	[SerializeField] private bool runAndMeasureFilterJob;
 
 	private NativeArray<float3x4> src;
 	private NativeList<float3x4> dstData;
@@ -25,11 +29,20 @@ public class CopyTestBehaviour : MonoBehaviour
 	private NativeReference<int> tempCounter;
 	private NativeArray<int> counts;
 	private NativeArray<BitField64> indices;
+	private NativeList<int> filterIndices;
 	private ComputeBuffer gpuBuffer;
 	private JobHandle handle;
 
-	private static readonly ProfilerMarker indexingSumJobMarker = new ProfilerMarker(nameof(ParallelIndexingSumJob<float3x4, GreaterThanZeroDel>));
-	private static readonly ProfilerMarker parallelCopyJobMarker = new ProfilerMarker(nameof(ParallelConditionalCopyJob<float3x4, DataRW<float3x4>>));
+	private static readonly ProfilerMarker indexingSumJobMarker =
+		new (nameof(ParallelIndexingSumJob<float3x4, GreaterThanZeroDel>));
+	private static readonly ProfilerMarker parallelCopyJobMarker =
+		new (nameof(ParallelConditionalCopyJob<float3x4, DataRW<float3x4>>));
+	private static readonly ProfilerMarker basicCopyJobMarker =
+		new (nameof(CopyJob<float3x4>));
+	private static readonly ProfilerMarker conditionalListCopyJobMarker =
+		new (nameof(ConditionalCopyJob<float3x4, GreaterThanZeroDel>));
+	private static readonly ProfilerMarker filterJobMarker =
+		new (nameof(FilterCopy<float3x4, GreaterThanZeroDel>));
 
 	private void Start()
 	{
@@ -38,7 +51,8 @@ public class CopyTestBehaviour : MonoBehaviour
 		dstData = new NativeList<float3x4>(dataLength, Allocator.Persistent);
 		counts = new NativeArray<int>(indices.Length, Allocator.Persistent);
 		counter = new NativeReference<int>(Allocator.Persistent);
-		
+		filterIndices = new NativeList<int>(dataLength, Allocator.Persistent);
+
 		for (int i = 0; i < src.Length; i++)
 			src[i] = GetData(i);
 
@@ -49,6 +63,40 @@ public class CopyTestBehaviour : MonoBehaviour
 	private void Update()
 	{
 		counter.Value = 0;
+
+		// Reset for next test
+		dstData.Resize(0, NativeArrayOptions.UninitializedMemory);
+		filterIndices.Resize(0, NativeArrayOptions.UninitializedMemory);
+		
+		if (runAndMeasureConditionalCopyJob)
+		{
+			conditionalListCopyJobMarker.Begin();
+			new ConditionalCopyJob<float3x4, GreaterThanZeroDel> { src = src, dst = dstData.AsParallelWriter(), Validator = default }.Schedule(src.Length, writeBatchCount).Complete();
+			conditionalListCopyJobMarker.End();	
+		}
+		
+		// Reset for next test
+		dstData.Resize(0, NativeArrayOptions.UninitializedMemory);
+		filterIndices.Resize(0, NativeArrayOptions.UninitializedMemory);
+		
+		if (runAndMeasureFilterJob)
+		{
+			filterJobMarker.Begin();
+			FilterCopy<float3x4, GreaterThanZeroDel>.Schedule(src, dstData, filterIndices, writeBatchCount).Complete();
+			filterJobMarker.End();
+		}
+		
+		// Reset for next test
+		dstData.Resize(src.Length, NativeArrayOptions.UninitializedMemory);
+
+		if (runAndMeasureBasicCopyJob)
+		{
+			basicCopyJobMarker.Begin();
+			new CopyJob<float3x4> { src = src, dst = dstData.AsArray() }.Schedule().Complete();
+			basicCopyJobMarker.End();	
+		}
+		
+		// Reset for next test
 		
 		if (useScheduleUtility)
 		{
@@ -145,5 +193,14 @@ public class CopyTestBehaviour : MonoBehaviour
 	public struct GreaterThanZeroDel : IValidator<float3x4>
 	{
 		public bool Validate(int index, float3x4 element) => element.c0.x > 0;
+	}
+
+	[BurstCompile(CompileSynchronously = true)]
+	private struct CopyJob<T> : IJob where T : unmanaged
+	{
+		[ReadOnly] public NativeArray<T> src;
+		[WriteOnly] public NativeArray<T> dst;
+
+		public void Execute() => src.CopyTo(dst);
 	}
 }

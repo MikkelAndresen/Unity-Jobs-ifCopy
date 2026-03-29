@@ -348,6 +348,9 @@ MonoBehaviour:
   useScheduleUtility: 1
   useScheduleUtilityPreAllocatedCollections: 1
   dataGenMethod: 3
+  runAndMeasureBasicCopyJob: 1
+  runAndMeasureConditionalCopyJob: 0
+  runAndMeasureFilterJob: 1
 --- !u!4 &461002253
 Transform:
   m_ObjectHideFlags: 0

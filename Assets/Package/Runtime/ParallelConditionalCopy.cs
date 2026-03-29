@@ -1,6 +1,9 @@
 using System;
 using Unity.Burst;
+using Unity.Burst.CompilerServices;
+using Unity.Burst.Intrinsics;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Mathematics;
 
@@ -119,12 +122,6 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 	}
 }
 
-/// <summary>
-/// Runs the read interface for each set bit of each element in the indices array and collects them in a temporary <see cref="Span{T}"/>.
-/// Then runs the write interface a single time using the <see cref="Span{T}"/>.
-/// </summary>
-/// <typeparam name="T"></typeparam>
-/// <typeparam name="W"></typeparam>
 [BurstCompile(CompileSynchronously = true), GenerateTestsForBurstCompatibility]
 public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCopyJob<T, W> where T : unmanaged where W : struct, IIndexWriter<T>, IIndexReader<T>
 {
@@ -144,12 +141,27 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 	
 	public unsafe void Execute(int index)
 	{
-		// We need to start write index of the src data which we can get from counts
-		int dstStartIndex = index == 0 ? 0 : counts[math.max(0, index - 1)];
+		Hint.Assume(counts.Length > 0);
+		Hint.Assume(indices.Length > 0);
 		
+		// We need to start write index of the src data which we can get from counts
+		int dstStartIndex = index == 0 ? 0 : counts[index - 1];                                                                                                                                                                             
 		int srcStartIndex = index * 64;
+		Hint.Assume(dstStartIndex >= 0);
+		Hint.Assume(srcStartIndex >= 0);
+
 		ulong n = indices[index].Value;
-		Span<T> temp = stackalloc T[math.countbits(n)];
+		var bitCount = math.countbits(n);
+		if(bitCount == 0)
+			return;
+		Hint.Assume(bitCount > 0);
+
+		Span<T> temp = stackalloc T[bitCount];
+		
+#if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
+		data.PrefetchSrc(srcStartIndex + bitCount);
+		data.PrefetchDst(dstStartIndex + bitCount);
+#endif
 		
 		int i = 0;
 		int t = 0;
@@ -158,9 +170,90 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 			int tzcnt = math.tzcnt(n);
 			t += tzcnt;
 			temp[i] = data.Read(srcStartIndex + t + i);
+			// data.Write(dstStartIndex + i, srcStartIndex + t + i);
+
 			i++;
 			n >>= tzcnt + 1;
 		}
 		data.Write(dstStartIndex, temp, i);
+	}
+}
+
+[BurstCompile]
+public struct ConditionalCopyJob<T, V> : IJobParallelFor where T : unmanaged where V : IValidator<T>
+{
+	[ReadOnly] public NativeArray<T> src;
+
+	public NativeList<T>.ParallelWriter dst;
+	public V Validator;
+	
+	public unsafe void Execute(int index)
+	{
+		Hint.Assume(src.Length > 0);
+		Hint.Assume(dst.ListData->Capacity > index);
+		var value = src[index];
+
+		// Check condition
+		if (Validator.Validate(index, value))
+			dst.AddNoResize(value);
+	}
+}
+
+public static class FilterCopy<T, V> where T : unmanaged where V : unmanaged, IValidator<T>
+{
+	public static JobHandle Schedule(NativeArray<T> src, NativeList<T> dst, NativeList<int> indices, int innerLoopBatchCount, JobHandle dependsOn = default)
+	{
+		var handle = new FilterJob { src = src, Validator = default }.ScheduleAppend(indices, src.Length, dependsOn);
+		handle = new UpdateListLengthJob { list = dst, indices = indices }.Schedule(handle);
+		handle = new IndicesCopyJob { src = src, indices = indices, dst = dst }.Schedule(indices, innerLoopBatchCount, handle);
+		return handle;
+	}
+	
+	[BurstCompile]
+	private unsafe struct IndicesCopyJob : IJobParallelForDefer
+	{
+		[ReadOnly]
+		public NativeArray<T> src;
+		[ReadOnly]
+		public NativeList<int> indices;
+		[WriteOnly, NativeDisableParallelForRestriction]
+		public NativeList<T> dst;
+		
+		public IndicesCopyJob(NativeArray<T> src, NativeList<int> indices, NativeList<T> dst)
+		{
+			this.src = src;
+			this.indices = indices;
+			this.dst = dst;
+		}
+		
+		public void Execute(int index)
+		{
+			Hint.Assume(src.Length > 0);
+			Hint.Assume(indices.Length > 0);
+			int srcIndex = indices[index];
+			Hint.Assume(srcIndex >= 0);
+			
+			dst[index] = src[srcIndex];
+		}
+	}
+
+	[BurstCompile]
+	private struct UpdateListLengthJob : IJob
+	{
+		[WriteOnly]
+		public NativeList<T> list;
+		[ReadOnly]
+		public NativeList<int> indices;
+		
+		public void Execute() => list.Length = indices.Length;
+	}
+	
+	[BurstCompile]
+	private struct FilterJob : IJobFilter
+	{
+		[ReadOnly] public NativeArray<T> src;
+		public V Validator;
+
+		public bool Execute(int index) => Validator.Validate(index, src[index]);
 	}
 }
