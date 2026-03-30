@@ -341,13 +341,13 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   dataLength: 10000000
-  useGPUBuffer: 1
+  useGPUBuffer: 0
   indexingBatchCount: 1024
-  writeBatchCount: 16384
+  writeBatchCount: 32768
   completeInLateUpdate: 0
-  useScheduleUtility: 1
+  useScheduleUtility: 0
   useScheduleUtilityPreAllocatedCollections: 1
-  dataGenMethod: 1
+  dataGenMethod: 3
   runAndMeasureBasicCopyJob: 1
   runAndMeasureConditionalCopyJob: 0
   runAndMeasureFilterJob: 1

@@ -126,9 +126,16 @@ public class PerformanceTest
 		}).WarmupCount(3).MeasurementCount(20).Run();
 	}
 	
-	public struct GreaterThanZeroDel : IValidator<float3x4>
+	public struct GreaterThanZeroDel : IBatchValidator<float3x4>
 	{
 		public bool Validate(int index, float3x4 element) => element.c0.x > 0;
+		public BitField64 Validate(in NativeSlice<float3x4> elements)
+		{
+			var bits = new BitField64();
+			for (int i = 0; i < 64; i++)
+				bits.SetBits(i, elements[i].c0.x > 0);
+			return bits;
+		}
 	}
 	
 	private enum TestDataType

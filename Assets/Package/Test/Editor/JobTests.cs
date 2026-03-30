@@ -11,19 +11,40 @@ namespace Tests
 {
 	public class JobTests
 	{	
-		private struct GreaterThanZeroDel : IValidator<float>
+		private struct GreaterThanZeroDel : IBatchValidator<float>
 		{
 			public bool Validate(int index, float element) => element > 0;
+			public BitField64 Validate(in NativeSlice<float> elements)
+			{
+				var bits = new BitField64();
+				for (int i = 0; i < 64; i++)
+					bits.SetBits(i, elements[i] > 0);
+				return bits;
+			}
 		}
 
-		private struct ValidateTrue : IValidator<float>
+		private struct ValidateTrue : IBatchValidator<float>
 		{
 			public bool Validate(int index, float element) => true;
+			public BitField64 Validate(in NativeSlice<float> elements)
+			{
+				var bits = new BitField64();
+				for (int i = 0; i < 64; i++)
+					bits.SetBits(i, true);
+				return bits;
+			}
 		}
 
-		private struct ValidateFalse : IValidator<float>
+		private struct ValidateFalse : IBatchValidator<float>
 		{
 			public bool Validate(int index, float element) => false;
+			public BitField64 Validate(in NativeSlice<float> elements)
+			{
+				var bits = new BitField64();
+				for (int i = 0; i < 64; i++)
+					bits.SetBits(i, false);
+				return bits;
+			}
 		}
 
 		[Test]
@@ -79,12 +100,12 @@ namespace Tests
 			});
 		}
 
-		private static void TestBothSingleAndParallelCopyJobs<T>(Func<float, float> dataGen) where T : unmanaged, IValidator<float>
+		private static void TestBothSingleAndParallelCopyJobs<T>(Func<float, float> dataGen) where T : unmanaged, IBatchValidator<float>
 		{
 			TestParallelConditionParallelCopy<T>(dataGen);
 		}
 
-		private static void TestParallelConditionParallelCopy<T>(Func<float, float> dataGen) where T : unmanaged, IValidator<float>
+		private static void TestParallelConditionParallelCopy<T>(Func<float, float> dataGen) where T : unmanaged, IBatchValidator<float>
 		{
 			NativeArray<float> src = new NativeArray<float>(100, Allocator.Persistent);
 			for (int i = 0; i < src.Length; i++)

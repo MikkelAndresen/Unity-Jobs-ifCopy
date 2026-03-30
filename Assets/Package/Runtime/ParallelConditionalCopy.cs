@@ -1,12 +1,9 @@
 using System;
 using Unity.Burst;
 using Unity.Burst.CompilerServices;
-using Unity.Burst.Intrinsics;
 using Unity.Collections;
-using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Mathematics;
-using UnityEngine;
 
 /// <summary>
 /// This job is meant to pack booleans into <see cref="indices"/>.
@@ -15,9 +12,9 @@ using UnityEngine;
 /// </summary>
 /// <typeparam name="T"></typeparam>
 /// <typeparam name="V"></typeparam>
-[BurstCompile(CompileSynchronously = true), GenerateTestsForBurstCompatibility]
+[BurstCompile(CompileSynchronously = true, OptimizeFor = OptimizeFor.Performance), GenerateTestsForBurstCompatibility]
 public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexingJob<T, V>
-	where T : unmanaged where V : IValidator<T>
+	where T : unmanaged where V : IBatchValidator<T>
 {
 	[ReadOnly] public V del;
 	[ReadOnly] public NativeArray<T> src;
@@ -34,26 +31,31 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 		this.counts = counts;
 		this.del = del;
 	}
-
+	
+	[SkipLocalsInit]
 	public void Execute(int index)
 	{
 		//conditionIndexingSumJobMarker.Begin();
 
-		BitField64 bits = new BitField64(0);
+		// BitField64 bits = new BitField64();
 		int dataIndex = index * 64;
+		Hint.Assume(src.Length >= dataIndex + 64); // bounds hint
+		
+		// for (int i = 0; i < 64; i++)
+		// {
+		// 	int j = dataIndex + i;
+		// 	bool v = del.Validate(j, src[j]);
+		// 	
+		// 	// This one seems to generate less instructions, but not vectorized. The performance was the same as the line below however.
+		// 	bits.SetBits(i, v);
+		// 	// This generates more vectorized instructions with the same performance, I'm guessing the power cost is higher for this line though.
+		// 	// bits.Value |= (v ? 1ul : 0ul) << i;
+		// }
 
-		for (int i = 0; i < 64; i++)
-		{
-			bool v = del.Validate(dataIndex + i, src[dataIndex + i]);
-			// This one seems to generate less instructions, but not vectorized. The performance was the same as the line below however.
-			bits.SetBits(i, v);
-			// This generates more vectorized instructions with the same performance, I'm guessing the power cost is higher for this line though.
-			// bits.Value |= (del.Validate(src[dataIndex + i]) ? 1ul : 0ul) << i;
-		}
-
+		var slice = src.Slice(dataIndex, 64);
+		var bits = del.Validate(slice);
 		counts[index] = math.countbits(bits.Value);
 		indices[index] = bits;
-
 		//conditionIndexingSumJobMarker.End();
 	}
 
@@ -62,7 +64,7 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 	/// This job sets the bits and sums the last element of <see cref="indices"/>.
 	/// It also will count all the bits at the end and store the count so far in <see cref="counts"/>.
 	/// </summary>
-	[BurstCompile(CompileSynchronously = true), GenerateTestsForBurstCompatibility]
+	[BurstCompile(CompileSynchronously = true, OptimizeFor = OptimizeFor.Performance), GenerateTestsForBurstCompatibility]
 	private struct RemainderSumJob : IJob
 	{
 		[ReadOnly] public V del;
@@ -78,7 +80,6 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 
 			int remainderCount = src.Length % 64;
 			int dataStartIndex = src.Length - remainderCount;
-			bits.Clear();
 
 			for (int i = 0; i < remainderCount; i++)
 				bits.SetBits(i, del.Validate(dataStartIndex + i, src[dataStartIndex + i]));
@@ -126,7 +127,7 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 	}
 }
 
-[BurstCompile(CompileSynchronously = true), GenerateTestsForBurstCompatibility]
+[BurstCompile(CompileSynchronously = true, OptimizeFor = OptimizeFor.Performance), GenerateTestsForBurstCompatibility]
 public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCopyJob<T, W> where T : unmanaged
 	where W : struct, IIndexWriter<T>, IIndexReader<T>
 {
@@ -147,9 +148,10 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 	// TODO Insert another job to find contiguous ranges between each batch
 	// This can then be used to produce fewer threads and larger copy blocks
 	
-	public void Execute(int index) => ExecuteBatched(index);
-	// public void Execute(int index) => ExecuteSingle(index);
+	// public void Execute(int index) => ExecuteBatched(index);
+	public void Execute(int index) => ExecuteSingle(index);
 
+	[SkipLocalsInit]
 	public unsafe void ExecuteSingle(int index)
 	{
 		Hint.Assume(counts.Length > 0);
@@ -196,7 +198,8 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 		data.Write(dstStartIndex, temp, i);
 	}
 
-	public unsafe void ExecuteBatched(int index)
+	[SkipLocalsInit]
+	public void ExecuteBatched(int index)
 	{
 		Hint.Assume(counts.Length > 0);
 		Hint.Assume(indices.Length > 0);
@@ -213,8 +216,8 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 			return;
 		Hint.Assume(bitCount > 0);
 
-		// Span<T> temp = stackalloc T[64];
-		// data.CopyTo(srcStartIndex, 64, temp);
+		// Span<T> temp = stackalloc T[bitCount];
+		// data.CopyTo(srcStartIndex, bitCount, temp);
 		
 		// data.ReadAsSpan(srcStartIndex, 64).CopyTo(temp);
 		// var arr = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray(temp, Allocator.None);
@@ -247,12 +250,13 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 				n = shift >= 64 ? 0 : n >> shift;
 			}
 		
+			// data.Write(dstStartIndex, temp, bitCount);
 			// data.Write(dstStartIndex, temp, i);
 		// }
 	}
 }
 
-[BurstCompile]
+[BurstCompile(CompileSynchronously = true, OptimizeFor = OptimizeFor.Performance)]
 public struct ConditionalCopyJob<T, V> : IJobParallelFor where T : unmanaged where V : IValidator<T>
 {
 	[ReadOnly] public NativeArray<T> src;
@@ -279,26 +283,18 @@ public static class FilterCopy<T, V> where T : unmanaged where V : unmanaged, IV
 	{
 		var handle = new FilterJob { src = src, Validator = default }.ScheduleAppend(indices, src.Length, dependsOn);
 		handle = new UpdateListLengthJob { list = dst, indices = indices }.Schedule(handle);
-		handle = new IndicesCopyJob { src = src, indices = indices, dst = dst }.Schedule(indices, innerLoopBatchCount,
-			handle);
+		handle = new IndicesCopyJob { src = src, indices = indices, dst = dst }.Schedule(indices, innerLoopBatchCount, handle);
 		return handle;
 	}
 
-	[BurstCompile]
-	private unsafe struct IndicesCopyJob : IJobParallelForDefer
+	[BurstCompile(CompileSynchronously = true, OptimizeFor = OptimizeFor.Performance)]
+	private struct IndicesCopyJob : IJobParallelForDefer
 	{
 		[ReadOnly] public NativeArray<T> src;
 		[ReadOnly] public NativeList<int> indices;
 
 		[WriteOnly, NativeDisableParallelForRestriction]
 		public NativeList<T> dst;
-
-		public IndicesCopyJob(NativeArray<T> src, NativeList<int> indices, NativeList<T> dst)
-		{
-			this.src = src;
-			this.indices = indices;
-			this.dst = dst;
-		}
 
 		public void Execute(int index)
 		{
@@ -311,7 +307,7 @@ public static class FilterCopy<T, V> where T : unmanaged where V : unmanaged, IV
 		}
 	}
 
-	[BurstCompile]
+	[BurstCompile(CompileSynchronously = true, OptimizeFor = OptimizeFor.Performance)]
 	private struct UpdateListLengthJob : IJob
 	{
 		[WriteOnly] public NativeList<T> list;
@@ -320,7 +316,7 @@ public static class FilterCopy<T, V> where T : unmanaged where V : unmanaged, IV
 		public void Execute() => list.Length = indices.Length;
 	}
 
-	[BurstCompile]
+	[BurstCompile(CompileSynchronously = true, OptimizeFor = OptimizeFor.Performance)]
 	private struct FilterJob : IJobFilter
 	{
 		[ReadOnly] public NativeArray<T> src;

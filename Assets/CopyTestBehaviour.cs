@@ -1,4 +1,7 @@
+using System;
+using System.Runtime.CompilerServices;
 using Unity.Burst;
+using Unity.Burst.CompilerServices;
 using UnityEngine;
 using Unity.Mathematics;
 using Unity.Collections;
@@ -100,6 +103,8 @@ public class CopyTestBehaviour : MonoBehaviour
 		
 		if (useScheduleUtility)
 		{
+			parallelCopyJobMarker.Begin();
+
 			if (useGPUBuffer) // Array
 			{
 				var dst = gpuBuffer.BeginWrite<float3x4>(0, dataLength);
@@ -117,6 +122,7 @@ public class CopyTestBehaviour : MonoBehaviour
 			
 			if (!completeInLateUpdate)
 				handle.Complete();
+			parallelCopyJobMarker.End();
 		}
 		else
 		{
@@ -126,14 +132,15 @@ public class CopyTestBehaviour : MonoBehaviour
 			
 			var copyJob = new ParallelConditionalCopyJob<float3x4, DataRW<float3x4>>(writer, indices, counts);
 
+			parallelCopyJobMarker.Begin();
 			indexingSumJobMarker.Begin();
 			handle = ParallelIndexingSumJob<float3x4, GreaterThanZeroDel>.Schedule(src, indices, counts, counter, indexingBatchCount);
 			if (!completeInLateUpdate)
 				handle.Complete();
 			indexingSumJobMarker.End();
 			
-			parallelCopyJobMarker.Begin();
 			handle = copyJob.Schedule(indices.Length, writeBatchCount, handle);
+			// handle = copyJob.Schedule(indices.Length, handle);
 			
 			if (!completeInLateUpdate)
 				handle.Complete();
@@ -149,7 +156,9 @@ public class CopyTestBehaviour : MonoBehaviour
 		if (!completeInLateUpdate)
 			return;
 
+		parallelCopyJobMarker.Begin();
 		handle.Complete();
+		parallelCopyJobMarker.End();
 		EndGPUWrite();
 	}
 
@@ -190,9 +199,19 @@ public class CopyTestBehaviour : MonoBehaviour
 		Half
 	}
 	
-	public struct GreaterThanZeroDel : IValidator<float3x4>
+	public struct GreaterThanZeroDel : IBatchValidator<float3x4>
 	{
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public bool Validate(int index, float3x4 element) => element.c0.x > 0;
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public BitField64 Validate(in NativeSlice<float3x4> elements)
+		{
+			var bits = new BitField64();
+			Hint.Assume(elements.Length == 64);
+			for (int i = 0; i < 64; i++)
+				bits.SetBits(i, elements[i].c0.x > 0);
+			return bits;
+		}
 	}
 
 	[BurstCompile(CompileSynchronously = true)]

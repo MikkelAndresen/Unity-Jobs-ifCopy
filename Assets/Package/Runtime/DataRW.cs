@@ -42,15 +42,15 @@ public unsafe struct DataRW<T> : IIndexWriter<T>, IIndexReader<T> where T : unma
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public T Read([AssumeRange(0, int.MaxValue)] int index)
+	public T Read([AssumeRange(0, 64)] int index)
 	{
 		Hint.Assume(src.Length > 0);
 		return src[index];
 	}
 
-	public NativeSlice<T> Read(int startIndex, int count) => src.Slice(startIndex, count);
+	public NativeSlice<T> Read([AssumeRange(0, int.MaxValue)] int startIndex, [AssumeRange(0, 64)] int count) => src.Slice(startIndex, count);
 
-	public void CopyTo(int startIndex, int count, Span<T> other)
+	public void CopyTo([AssumeRange(0, int.MaxValue)] int startIndex, [AssumeRange(0, 64)] int count, Span<T> other)
 	{
 		fixed(T* ptr = other)
 			UnsafeUtility.MemCpy(ptr, srcPtr + startIndex, Stride * count);
@@ -59,7 +59,7 @@ public unsafe struct DataRW<T> : IIndexWriter<T>, IIndexReader<T> where T : unma
 	
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	public void Write([AssumeRange(0, int.MaxValue)] int startIndex, in ReadOnlySpan<T> values,
-		[AssumeRange(0, int.MaxValue)] int length)
+		[AssumeRange(0, 64)] int length)
 	{
 		Hint.Assume(src.Length > 0);
 		Hint.Assume(dst.Length > 0);

@@ -1,15 +1,14 @@
 using System;
 using Unity.Collections;
-using Unity.Mathematics;
 
 public interface IValidator<in T> where T : unmanaged
 {
 	bool Validate(int index, T element);
 }
 
-public interface IValidatorVectorized<in T> where T : unmanaged
+public interface IBatchValidator<T> : IValidator<T> where T : unmanaged
 {
-	bool4 Validate(int4 indices, T element);
+	BitField64 Validate(in NativeSlice<T> elements);
 }
 
 public interface IIndexWriter

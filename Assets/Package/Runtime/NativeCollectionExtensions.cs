@@ -14,7 +14,7 @@ public static class NativeCollectionExtensions
 	/// </summary>
 	/// <typeparam name="T"></typeparam>
 	/// <typeparam name="V"></typeparam>
-	public unsafe class CopyHandler<T, V> : IDisposable where T : unmanaged where V : unmanaged, IValidator<T>
+	public unsafe class CopyHandler<T, V> : IDisposable where T : unmanaged where V : unmanaged, IBatchValidator<T>
 	{
 		public NativeArray<T> src;
 		public NativeArray<T> dst;
@@ -137,7 +137,7 @@ public static class NativeCollectionExtensions
 		JobHandle dependsOn = default,
 		NativeArray<BitField64> indices = default,
 		NativeArray<int> counts = default,
-		V validator = default) where T : unmanaged where V : unmanaged, IValidator<T> => IfCopyToParallel(
+		V validator = default) where T : unmanaged where V : unmanaged, IBatchValidator<T> => IfCopyToParallel(
 		src, dst, (T*)src.GetUnsafeReadOnlyPtr(), (T*)dst.GetUnsafeReadOnlyPtr(),
 		out counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
 
@@ -152,7 +152,7 @@ public static class NativeCollectionExtensions
 		JobHandle dependsOn = default,
 		NativeArray<BitField64> indices = default,
 		NativeArray<int> counts = default,
-		V validator = default) where T : unmanaged where V : unmanaged, IValidator<T>
+		V validator = default) where T : unmanaged where V : unmanaged, IBatchValidator<T>
 	{
 		Assert.IsTrue(dst.Length >= src.Length, "Assert Failed: dst.Length < src.Length");
 		int indicesLength = (int)math.ceil(src.Length / 64f);
@@ -184,7 +184,7 @@ public static class NativeCollectionExtensions
 		JobHandle dependsOn = default,
 		NativeArray<BitField64> indices = default,
 		NativeArray<int> counts = default,
-		V validator = default) where T : unmanaged where V : unmanaged, IValidator<T>
+		V validator = default) where T : unmanaged where V : unmanaged, IBatchValidator<T>
 	{
 		Assert.IsTrue(dst.Capacity >= src.Length, "Assert Failed: dst.Capacity < src.Length");
 		dst.ResizeUninitialized(dst.Capacity);
@@ -196,10 +196,6 @@ public static class NativeCollectionExtensions
 
 		return handle;
 	}
-	
-	public unsafe static NativeArray<T> AsArray<T>(this NativeSlice<T> slice) where T : unmanaged =>
-		NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<T>(slice.GetUnsafePtr(), slice.Length,
-			Allocator.Invalid);
 	
 	private struct AssignJobLengthJob<T> : IJob where T : unmanaged
 	{
