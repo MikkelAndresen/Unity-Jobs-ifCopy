@@ -91,7 +91,7 @@ namespace Tests
 		public void TestCopyAllBatchedBits()
 		{
 			int j = 0;
-			TestBothSingleAndParallelCopyJobs<GreaterThanZeroDel>((_) => 
+			TestBothSingleAndParallelCopyJobs<GreaterThanZeroDel>((_) =>
 			{
 				j++;
 				if (j >= 5)
@@ -100,21 +100,30 @@ namespace Tests
 			});
 		}
 
+		[Test]
+		public void TestCopyMultipleOf64_AllPass() => TestParallelConditionParallelCopy<ValidateTrue>((i) => i, 128);
+
+		[Test]
+		public void TestCopyMultipleOf64_OddPass() => TestParallelConditionParallelCopy<GreaterThanZeroDel>((i) => i % 2 == 0 ? -1f : 1, 128);
+
+		[Test]
+		public void TestCopyMultipleOf64_NonePass() => TestParallelConditionParallelCopy<ValidateFalse>((i) => i, 128);
+
 		private static void TestBothSingleAndParallelCopyJobs<T>(Func<float, float> dataGen) where T : unmanaged, IBatchValidator<float>
 		{
 			TestParallelConditionParallelCopy<T>(dataGen);
 		}
 
-		private static void TestParallelConditionParallelCopy<T>(Func<float, float> dataGen) where T : unmanaged, IBatchValidator<float>
+		private static void TestParallelConditionParallelCopy<T>(Func<float, float> dataGen, int length = 100) where T : unmanaged, IBatchValidator<float>
 		{
-			NativeArray<float> src = new NativeArray<float>(100, Allocator.Persistent);
+			NativeArray<float> src = new NativeArray<float>(length, Allocator.Persistent);
 			for (int i = 0; i < src.Length; i++)
 				src[i] = dataGen(i);
 
-			NativeArray<BitField64> indices = new NativeArray<BitField64>((int)math.ceil(100f / 64f), Allocator.Persistent);
+			NativeArray<BitField64> indices = new NativeArray<BitField64>((int)math.ceil(length / 64f), Allocator.Persistent);
 			NativeArray<int> counts = new NativeArray<int>(indices.Length, Allocator.Persistent);
-			NativeArray<float> dstArr = new NativeArray<float>(100, Allocator.Persistent);
-			NativeList<float> dstList = new NativeList<float>(100, Allocator.Persistent);
+			NativeArray<float> dstArr = new NativeArray<float>(length, Allocator.Persistent);
+			NativeList<float> dstList = new NativeList<float>(length, Allocator.Persistent);
 
 			src.IfCopyToParallel<float, T>(dstArr, out var counter, 10, 10, default, indices, counts).Complete();
 			src.IfCopyToParallel<float, T>(dstList, 10, 10, default, indices, counts).Complete();
@@ -158,9 +167,9 @@ namespace Tests
 		private static (float[] arr, int expectedLength) GetExpected<T>(IReadOnlyList<float> data) where T : IValidator<float>
 		{
 			T comparer = default;
-			float[] expected = new float[100];
+			float[] expected = new float[data.Count];
 			int j = 0;
-			for (int i = 0; i < expected.Length; i++)
+			for (int i = 0; i < data.Count; i++)
 			{
 				if (comparer != null && !comparer.Validate(i, data[i])) continue;
 				expected[j] = data[i];

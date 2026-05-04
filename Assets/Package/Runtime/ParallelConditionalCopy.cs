@@ -21,7 +21,6 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 	[WriteOnly] public NativeArray<BitField64> indices;
 
 	[WriteOnly] public NativeArray<int> counts;
-	// private static readonly ProfilerMarker conditionIndexingSumJobMarker = new ProfilerMarker(nameof(ConditionIndexingSumJob<T, M>));
 
 	public ParallelIndexingSumJob(NativeArray<T> src, NativeArray<BitField64> indices, NativeArray<int> counts,
 		V del = default)
@@ -31,71 +30,42 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 		this.counts = counts;
 		this.del = del;
 	}
-	
+
 	[SkipLocalsInit]
 	public void Execute(int index)
 	{
-		//conditionIndexingSumJobMarker.Begin();
-
-		// BitField64 bits = new BitField64();
 		int dataIndex = index * 64;
 		Hint.Assume(src.Length >= dataIndex + 64); // bounds hint
-		
-		// for (int i = 0; i < 64; i++)
-		// {
-		// 	int j = dataIndex + i;
-		// 	bool v = del.Validate(j, src[j]);
-		// 	
-		// 	// This one seems to generate less instructions, but not vectorized. The performance was the same as the line below however.
-		// 	bits.SetBits(i, v);
-		// 	// This generates more vectorized instructions with the same performance, I'm guessing the power cost is higher for this line though.
-		// 	// bits.Value |= (v ? 1ul : 0ul) << i;
-		// }
 
 		var slice = src.Slice(dataIndex, 64);
 		var bits = del.Validate(slice);
 		counts[index] = math.countbits(bits.Value);
 		indices[index] = bits;
-		//conditionIndexingSumJobMarker.End();
 	}
 
-	// private static readonly ProfilerMarker remainderJobMarker = new ProfilerMarker(nameof(RemainderSumJob));
 	/// <summary>
-	/// This job sets the bits and sums the last element of <see cref="indices"/>.
-	/// It also will count all the bits at the end and store the count so far in <see cref="counts"/>.
+	/// Validates the remainder elements that don't fill a complete 64-bit batch.
+	/// The prefix sum is handled separately by <see cref="PrefixSum"/>.
 	/// </summary>
 	[BurstCompile(CompileSynchronously = true, OptimizeFor = OptimizeFor.Performance), GenerateTestsForBurstCompatibility]
-	private struct RemainderSumJob : IJob
+	private struct RemainderValidationJob : IJob
 	{
 		[ReadOnly] public V del;
 		[ReadOnly] public NativeArray<T> src;
 		[WriteOnly] public NativeArray<BitField64> indices;
-		public NativeArray<int> counts;
-		public NativeReference<int> totalCount;
-		private BitField64 bits;
+		[NativeDisableParallelForRestriction] public NativeArray<int> counts;
 
 		public void Execute()
 		{
-			//remainderJobMarker.Begin();
-
 			int remainderCount = src.Length % 64;
 			int dataStartIndex = src.Length - remainderCount;
 
+			var bits = new BitField64();
 			for (int i = 0; i < remainderCount; i++)
 				bits.SetBits(i, del.Validate(dataStartIndex + i, src[dataStartIndex + i]));
 
 			counts[indices.Length - 1] = math.countbits(bits.Value);
 			indices[indices.Length - 1] = bits;
-
-			// Lastly we want to count all of them together 
-			for (int i = 0; i < counts.Length; i++)
-			{
-				totalCount.Value += counts[i];
-				// We store the count so far because we can use it later
-				counts[i] = totalCount.Value;
-			}
-
-			//remainderJobMarker.End();
 		}
 	}
 
@@ -109,21 +79,150 @@ public struct ParallelIndexingSumJob<T, V> : IJobParallelFor, IConditionalIndexi
 		V del = default)
 	{
 		int remainder = src.Length % 64;
-		// The job only supports writing whole 64 bit batches, so we floor here and then run the remainder elsewhere
-		int length = (int)math.floor(src.Length / 64f);
+		int length = src.Length / 64;
 		var handle =
 			new ParallelIndexingSumJob<T, V>(src, indices, counts, del).Schedule(length, innerBatchCount, dependsOn);
+
 		if (remainder > 0)
-			handle = new RemainderSumJob
+			handle = new RemainderValidationJob
 			{
 				src = src,
 				indices = indices,
 				counts = counts,
-				totalCount = totalCount,
 				del = del,
 			}.Schedule(handle);
 
+		handle = PrefixSum.Schedule(counts, totalCount, handle);
+
 		return handle;
+	}
+}
+
+/// <summary>
+/// Parallel prefix sum over an integer array.
+/// For small arrays (single block), uses a simple sequential scan.
+/// For larger arrays, uses a 3-phase parallel algorithm:
+/// 1. Partial prefix sums within each block (parallel)
+/// 2. Sequential prefix sum over block totals
+/// 3. Add block offsets to finalize global prefix sums (parallel)
+/// </summary>
+public static class PrefixSum
+{
+	private const int BlockSize = 1024;
+
+	public static JobHandle Schedule(NativeArray<int> counts, NativeReference<int> totalCount, JobHandle dependsOn)
+	{
+		int numBlocks = (counts.Length + BlockSize - 1) / BlockSize;
+
+		if (numBlocks <= 1)
+		{
+			return new SequentialPrefixSumJob
+			{
+				counts = counts,
+				totalCount = totalCount,
+			}.Schedule(dependsOn);
+		}
+
+		var blockTotals = new NativeArray<int>(numBlocks, Allocator.TempJob);
+
+		// Step 1: Partial prefix sums within each block
+		var handle = new ParallelPartialPrefixSumJob
+		{
+			counts = counts,
+			blockTotals = blockTotals,
+		}.Schedule(numBlocks, 1, dependsOn);
+
+		// Step 2: Sequential prefix sum over block totals
+		handle = new BlockPrefixSumJob
+		{
+			blockTotals = blockTotals,
+			totalCount = totalCount,
+		}.Schedule(handle);
+
+		// Step 3: Add block offsets to all elements except block 0
+		handle = new FinalizePrefixSumJob
+		{
+			counts = counts,
+			blockTotals = blockTotals,
+		}.Schedule(numBlocks - 1, 1, handle);
+
+		blockTotals.Dispose(handle);
+		return handle;
+	}
+
+	[BurstCompile(CompileSynchronously = true, OptimizeFor = OptimizeFor.Performance)]
+	private struct SequentialPrefixSumJob : IJob
+	{
+		public NativeArray<int> counts;
+		public NativeReference<int> totalCount;
+
+		public void Execute()
+		{
+			int sum = 0;
+			for (int i = 0; i < counts.Length; i++)
+			{
+				sum += counts[i];
+				counts[i] = sum;
+			}
+			totalCount.Value = sum;
+		}
+	}
+
+	[BurstCompile(CompileSynchronously = true, OptimizeFor = OptimizeFor.Performance)]
+	private struct ParallelPartialPrefixSumJob : IJobParallelFor
+	{
+		[NativeDisableParallelForRestriction] public NativeArray<int> counts;
+		[WriteOnly] public NativeArray<int> blockTotals;
+
+		public void Execute(int blockIndex)
+		{
+			int start = blockIndex * BlockSize;
+			int end = math.min(start + BlockSize, counts.Length);
+
+			int sum = 0;
+			for (int i = start; i < end; i++)
+			{
+				sum += counts[i];
+				counts[i] = sum;
+			}
+			blockTotals[blockIndex] = sum;
+		}
+	}
+
+	[BurstCompile(CompileSynchronously = true, OptimizeFor = OptimizeFor.Performance)]
+	private struct BlockPrefixSumJob : IJob
+	{
+		public NativeArray<int> blockTotals;
+		public NativeReference<int> totalCount;
+
+		public void Execute()
+		{
+			int sum = 0;
+			for (int i = 0; i < blockTotals.Length; i++)
+			{
+				sum += blockTotals[i];
+				blockTotals[i] = sum;
+			}
+			totalCount.Value = sum;
+		}
+	}
+
+	[BurstCompile(CompileSynchronously = true, OptimizeFor = OptimizeFor.Performance)]
+	private struct FinalizePrefixSumJob : IJobParallelFor
+	{
+		[NativeDisableParallelForRestriction] public NativeArray<int> counts;
+		[ReadOnly] public NativeArray<int> blockTotals;
+
+		public void Execute(int blockIndex)
+		{
+			// blockIndex is 0-based but represents block (blockIndex + 1) since block 0 is skipped
+			int offset = blockTotals[blockIndex]; // cumulative total of blocks 0..blockIndex
+			int start = (blockIndex + 1) * BlockSize;
+			int end = math.min(start + BlockSize, counts.Length);
+
+			for (int i = start; i < end; i++)
+				counts[i] += offset;
+		}
 	}
 }
 
@@ -145,11 +244,24 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 		this.indices = indices;
 	}
 
-	// TODO Insert another job to find contiguous ranges between each batch
-	// This can then be used to produce fewer threads and larger copy blocks
-	
-	// public void Execute(int index) => ExecuteBatched(index);
-	public void Execute(int index) => ExecuteSingle(index);
+	[SkipLocalsInit]
+	public void Execute(int index)
+	{
+		ulong n = indices[index].Value;
+		var bitCount = math.countbits(n);
+
+		if (bitCount == 0) return;
+
+		// Fast path: entire batch passes — single contiguous memcpy
+		if (bitCount == 64)
+		{
+			int dstStart = index == 0 ? 0 : counts[index - 1];
+			data.Write(dstStart, index * 64, 64);
+			return;
+		}
+
+		ExecuteSingle(index);
+	}
 
 	[SkipLocalsInit]
 	public unsafe void ExecuteSingle(int index)
@@ -170,7 +282,6 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 		Hint.Assume(bitCount > 0);
 
 		Span<T> temp = stackalloc T[bitCount];
-		// Span<int> temp = stackalloc int[bitCount];
 
 #if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
 		data.PrefetchSrc(srcStartIndex + bitCount);
@@ -184,17 +295,11 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 			int tzcnt = math.tzcnt(n);
 			t += tzcnt;
 			temp[i] = data.Read(srcStartIndex + t + i);
-			// temp[i] = srcStartIndex + t + i;
-			// data.Write(dstStartIndex + i, srcStartIndex + t + i);
-	
+
 			i++;
 			n >>= tzcnt + 1;
 		}
 
-		// for (int j = 0; j < bitCount; j++)
-		// {
-		// 	data.Write(dstStartIndex + j, temp[j]);
-		// }
 		data.Write(dstStartIndex, temp, i);
 	}
 
@@ -216,43 +321,26 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 			return;
 		Hint.Assume(bitCount > 0);
 
-		// Span<T> temp = stackalloc T[bitCount];
-		// data.CopyTo(srcStartIndex, bitCount, temp);
-		
-		// data.ReadAsSpan(srcStartIndex, 64).CopyTo(temp);
-		// var arr = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray(temp, Allocator.None);
-		// data.Read(srcStartIndex, 64).CopyTo(arr);
-		
 #if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
 		data.PrefetchSrc(srcStartIndex + bitCount);
 		data.PrefetchDst(dstStartIndex + bitCount);
 #endif
-		// fixed (T* ptr = temp)
-		// {
-			// Batched run-length loop: copies consecutive set-bit runs in a single call
-			int i = 0;
-			int t = 0;
-			while (n != 0)
-			{
-				int tzcnt = math.tzcnt(n);
-				t += tzcnt;
-				int runLength = math.tzcnt(~(n >> tzcnt));
+		// Batched run-length loop: copies consecutive set-bit runs in a single call
+		int i = 0;
+		int t = 0;
+		while (n != 0)
+		{
+			int tzcnt = math.tzcnt(n);
+			t += tzcnt;
+			int runLength = math.tzcnt(~(n >> tzcnt));
 
-				data.Write(dstStartIndex + i, srcStartIndex + t, runLength);
+			data.Write(dstStartIndex + i, srcStartIndex + t, runLength);
 
-				// var read = data.Read(srcStartIndex + t, runLength);
-				// var read = temp[t];
-				// UnsafeUtility.MemCpy(ptr + i, read.GetUnsafeReadOnlyPtr(), data.Stride * runLength);
-				
-				i += runLength;
-				t += runLength;
-				int shift = tzcnt + runLength;
-				n = shift >= 64 ? 0 : n >> shift;
-			}
-		
-			// data.Write(dstStartIndex, temp, bitCount);
-			// data.Write(dstStartIndex, temp, i);
-		// }
+			i += runLength;
+			t += runLength;
+			int shift = tzcnt + runLength;
+			n = shift >= 64 ? 0 : n >> shift;
+		}
 	}
 }
 

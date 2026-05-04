@@ -227,6 +227,7 @@ MonoBehaviour:
   m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
+  m_characterHorizontalScale: 1
   m_wordSpacing: 0
   m_lineSpacing: 0
   m_lineSpacingMax: 0
@@ -310,6 +311,7 @@ MeshRenderer:
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
+  m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
 --- !u!1 &461002249
 GameObject:
@@ -340,13 +342,13 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7d8dfa1c42369b742b4d99d3b7b55dfe, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  dataLength: 10000000
-  useGPUBuffer: 0
+  dataLength: 1000000
+  useGPUBuffer: 1
   indexingBatchCount: 1024
   writeBatchCount: 32768
   completeInLateUpdate: 0
   useScheduleUtility: 0
-  useScheduleUtilityPreAllocatedCollections: 1
+  useScheduleUtilityPreAllocatedCollections: 0
   dataGenMethod: 3
   runAndMeasureBasicCopyJob: 1
   runAndMeasureConditionalCopyJob: 0

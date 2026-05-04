@@ -15,6 +15,7 @@ public interface IIndexWriter
 {
 	void Write(int dstIndex, int srcIndex);
 	void Write(int dstIndex, int srcIndex, int srcRange);
+	void Write(int startIndex, in ReadOnlySpan<int> indices);
 	int Stride { get; }
 #if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
 	void Prefetch(int dstIndex, int srcIndex);

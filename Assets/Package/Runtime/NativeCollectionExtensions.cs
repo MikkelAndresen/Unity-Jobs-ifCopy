@@ -161,7 +161,7 @@ public static class NativeCollectionExtensions
 		indices = tempBits ? new NativeArray<BitField64>(indicesLength, Allocator.TempJob) : indices;
 
 		bool tempCounts = !counts.IsCreated;
-		counts = tempCounts ? new NativeArray<int>(src.Length, Allocator.TempJob) : counts;
+		counts = tempCounts ? new NativeArray<int>(indicesLength, Allocator.TempJob) : counts;
 		counter = new NativeReference<int>(0, Allocator.TempJob);
 
 		DataRW<T> writer = new DataRW<T>(src, dst, srcReadOnlyPtr, dstReadOnlyPtr);

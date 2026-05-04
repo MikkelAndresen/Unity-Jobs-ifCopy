@@ -42,7 +42,7 @@ public unsafe struct DataRW<T> : IIndexWriter<T>, IIndexReader<T> where T : unma
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public T Read([AssumeRange(0, 64)] int index)
+	public T Read([AssumeRange(0, int.MaxValue)] int index)
 	{
 		Hint.Assume(src.Length > 0);
 		return src[index];
@@ -71,6 +71,18 @@ public unsafe struct DataRW<T> : IIndexWriter<T>, IIndexReader<T> where T : unma
 
 		fixed (T* ptr = values)
 			UnsafeUtility.MemCpy(dstPtr + startIndex, ptr, length * stride);
+	}
+	
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public void Write([AssumeRange(0, int.MaxValue)] int startIndex, in ReadOnlySpan<int> indices)
+	{
+		Hint.Assume(src.Length > 0);
+		Hint.Assume(dst.Length > 0);
+
+		for (int i = 0; i < indices.Length; i++)
+		{
+			dst[startIndex + i] = src[indices[i]];
+		}
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
