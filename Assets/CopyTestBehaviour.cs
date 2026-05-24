@@ -1,4 +1,3 @@
-using System;
 using System.Runtime.CompilerServices;
 using Unity.Burst;
 using Unity.Burst.CompilerServices;
@@ -22,6 +21,8 @@ public class CopyTestBehaviour : MonoBehaviour
 	[SerializeField] private bool useScheduleUtility;
 	[SerializeField] private bool useScheduleUtilityPreAllocatedCollections;
 	[SerializeField] private TestDataType dataGenMethod = TestDataType.Odd;
+	[SerializeField] private int segmentSpacing = 64;
+	[SerializeField] private int segmentLength = 8;
 	[SerializeField] private bool runAndMeasureBasicCopyJob;
 	[SerializeField] private bool runAndMeasureConditionalCopyJob;
 	[SerializeField] private bool runAndMeasureFilterJob;
@@ -175,6 +176,7 @@ public class CopyTestBehaviour : MonoBehaviour
 			TestDataType.All => 1,
 			TestDataType.Odd => i % 2 == 0 ? -1 : 1,
 			TestDataType.Half => i > 50 ? 1 : -1,
+			TestDataType.Segments => (i % math.max(segmentSpacing, 1)) < segmentLength ? 1 : -1,
 			_ => default,
 		};
 	
@@ -196,7 +198,8 @@ public class CopyTestBehaviour : MonoBehaviour
 		None,
 		All,
 		Odd,
-		Half
+		Half,
+		Segments
 	}
 	
 	public struct GreaterThanZeroDel : IBatchValidator<float3x4>
