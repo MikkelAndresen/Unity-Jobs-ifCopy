@@ -350,6 +350,8 @@ MonoBehaviour:
   useScheduleUtility: 0
   useScheduleUtilityPreAllocatedCollections: 0
   dataGenMethod: 3
+  segmentSpacing: 64
+  segmentLength: 8
   runAndMeasureBasicCopyJob: 1
   runAndMeasureConditionalCopyJob: 0
   runAndMeasureFilterJob: 1
