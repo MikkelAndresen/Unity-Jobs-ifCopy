@@ -1,9 +1,6 @@
-using System;
 using UnityEngine;
-using System.Text;
 using Cysharp.Text;
 using TMPro;
-using UnityEngine.Profiling;
 
 [RequireComponent(typeof(TextMeshPro))]
 public class DeltaTimeTxt : MonoBehaviour
