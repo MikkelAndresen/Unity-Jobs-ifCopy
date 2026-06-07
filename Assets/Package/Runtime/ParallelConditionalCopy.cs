@@ -125,21 +125,21 @@ public static class PrefixSum
 
 		var blockTotals = new NativeArray<int>(numBlocks, Allocator.TempJob);
 
-		// Step 1: Partial prefix sums within each block
+		// Partial prefix sums within each block
 		var handle = new ParallelPartialPrefixSumJob
 		{
 			counts = counts,
 			blockTotals = blockTotals,
 		}.Schedule(numBlocks, 1, dependsOn);
 
-		// Step 2: Sequential prefix sum over block totals
+		// Sequential prefix sum over block totals
 		handle = new BlockPrefixSumJob
 		{
 			blockTotals = blockTotals,
 			totalCount = totalCount,
 		}.Schedule(handle);
 
-		// Step 3: Add block offsets to all elements except block 0
+		// Add block offsets to all elements except block 0
 		handle = new FinalizePrefixSumJob
 		{
 			counts = counts,
@@ -230,6 +230,10 @@ public static class PrefixSum
 public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCopyJob<T, W> where T : unmanaged
 	where W : struct, IIndexWriter<T>, IIndexReader<T>
 {
+	// Average run length below which ExecuteSingle (gather-then-bulk-write) is preferred
+	// over ExecuteBatched (per-run memcpy). Bias higher for write-combined / GPU writers.
+	private const int SingleThreshold = 3;
+
 	public W data;
 	[ReadOnly] public NativeArray<int> counts;
 	[ReadOnly] private NativeArray<BitField64> indices;
@@ -244,42 +248,92 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 		this.indices = indices;
 	}
 
+	// Terminology: a "run" is a maximal contiguous span of set bits in the mask,
+	// which corresponds to a contiguous span of source elements to copy. Runs can
+	// straddle 64-bit batch boundaries; the cross-batch handoff logic below
+	// assigns each straddling run to the batch that owns its first bit.
 	[SkipLocalsInit]
 	public void Execute(int index)
-	{
-		ulong n = indices[index].Value;
-		var bitCount = math.countbits(n);
-
-		if (bitCount == 0) return;
-
-		// Fast path: entire batch passes — single contiguous memcpy
-		if (bitCount == 64)
-		{
-			int dstStart = index == 0 ? 0 : counts[index - 1];
-			data.Write(dstStart, index * 64, 64);
-			return;
-		}
-
-		ExecuteSingle(index);
-	}
-
-	[SkipLocalsInit]
-	public unsafe void ExecuteSingle(int index)
 	{
 		Hint.Assume(counts.Length > 0);
 		Hint.Assume(indices.Length > 0);
 
-		// We need to start write index of the src data which we can get from counts
-		int dstStartIndex = index == 0 ? 0 : counts[index - 1];
+		ulong n = indices[index].Value;
 		int srcStartIndex = index * 64;
+		int dstStartIndex = index == 0 ? 0 : counts[index - 1];
+
+		// Cross-batch handoff (leading side): if our leading 1s continue a run owned by the
+		// previous batch, that batch writes them as part of its extension. Skip them here.
+		if (CurBatchWrittenByPrevRun(in indices))
+		{
+			int leadingOnes = math.tzcnt(~n);
+			if (leadingOnes >= 64) return; // entire batch consumed by continuation
+			n &= ~((1UL << leadingOnes) - 1UL);
+			dstStartIndex += leadingOnes;
+		}
+
+		if (n == 0) return;
+
+		int bitCount = math.countbits(n);
+
+		// Cross-batch handoff (trailing side): if our trailing run reaches bit 63 and the
+		// next batch starts with a 1, we own a cross-batch run — compute the extension.
+		int extension = 0;
+		if (ShouldExtendCurBatch(in indices))
+			extension = ScanForwardExtension(index);
+
+		// Fast path: entire (remaining) batch is contiguous 1s.
+		if (bitCount == 64)
+		{
+			data.Write(dstStartIndex, srcStartIndex, 64 + extension);
+			return;
+		}
+
+		// Pick path by average run length. n & ~(n << 1) isolates run-start bits; popcount
+		// of that = number of runs. ExecuteSingle is forced off when extension > 0 because
+		// it can't carry a write into the following batches.
+		int runCount = math.countbits(n & ~(n << 1));
+
+		if (extension == 0 && bitCount < runCount * SingleThreshold)
+			ExecuteSingle(n, bitCount, dstStartIndex, srcStartIndex);
+		else
+			ExecuteBatched(n, dstStartIndex, srcStartIndex, extension);
+
+		bool CurBatchWrittenByPrevRun(in NativeArray<BitField64> batches)
+		{
+			return index > 0 &&
+			       (n & 1UL) != 0 && // First bit of current batch is set
+			       (batches[index - 1].Value >> 63) != 0; // Last bit of previous batch is set
+		}
+
+		bool ShouldExtendCurBatch(in NativeArray<BitField64> batches)
+		{
+			return (n >> 63) != 0 && // Last bit of current batch is set
+			       index + 1 < batches.Length && // Not last batch
+			       (batches[index + 1].Value & 1UL) != 0; // First bit of next batch set
+		}
+	}
+
+	private int ScanForwardExtension(int fromIndex)
+	{
+		int total = 0;
+		for (int i = fromIndex + 1; i < indices.Length; i++)
+		{
+			ulong next = indices[i].Value;
+			if ((next & 1UL) == 0) break;
+			int leading = math.tzcnt(~next);
+			total += leading;
+			if (leading < 64) break;
+		}
+		return total;
+	}
+
+	[SkipLocalsInit]
+	private unsafe void ExecuteSingle(ulong n, int bitCount, int dstStartIndex, int srcStartIndex)
+	{
+		Hint.Assume(bitCount > 0);
 		Hint.Assume(dstStartIndex >= 0);
 		Hint.Assume(srcStartIndex >= 0);
-
-		ulong n = indices[index].Value;
-		var bitCount = math.countbits(n);
-		if (bitCount == 0)
-			return;
-		Hint.Assume(bitCount > 0);
 
 		Span<T> temp = stackalloc T[bitCount];
 
@@ -297,7 +351,9 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 			temp[i] = data.Read(srcStartIndex + t + i);
 
 			i++;
-			n >>= tzcnt + 1;
+			// Two-step shift avoids C#'s shift-mask edge: `n >> 64` would become `n >> 0`
+			// when tzcnt == 63, causing an infinite loop.
+			n = (n >> tzcnt) >> 1;
 		}
 
 		data.Write(dstStartIndex, temp, i);
@@ -309,37 +365,59 @@ public struct ParallelConditionalCopyJob<T, W> : IJobParallelFor, IConditionalCo
 		Hint.Assume(counts.Length > 0);
 		Hint.Assume(indices.Length > 0);
 
-		// We need to start write index of the src data which we can get from counts
+		ulong n = indices[index].Value;
+		if (n == 0) return;
 		int dstStartIndex = index == 0 ? 0 : counts[index - 1];
 		int srcStartIndex = index * 64;
+
+		int extension = 0;
+		if ((n >> 63) != 0 && index + 1 < indices.Length && (indices[index + 1].Value & 1UL) != 0)
+			extension = ScanForwardExtension(index);
+
+		ExecuteBatched(n, dstStartIndex, srcStartIndex, extension);
+	}
+
+	[SkipLocalsInit]
+	private void ExecuteBatched(ulong n, int dstStartIndex, int srcStartIndex, int extension)
+	{
 		Hint.Assume(dstStartIndex >= 0);
 		Hint.Assume(srcStartIndex >= 0);
 
-		ulong n = indices[index].Value;
-		var bitCount = math.countbits(n);
-		if (bitCount == 0)
-			return;
-		Hint.Assume(bitCount > 0);
-
 #if UNITY_BURST_EXPERIMENTAL_PREFETCH_INTRINSIC
-		data.PrefetchSrc(srcStartIndex + bitCount);
-		data.PrefetchDst(dstStartIndex + bitCount);
+		data.PrefetchSrc(srcStartIndex + 64 + extension);
+		data.PrefetchDst(dstStartIndex + 64 + extension);
 #endif
-		// Batched run-length loop: copies consecutive set-bit runs in a single call
+
+		// Run-length loop, unrolled by 2 to halve loop-control overhead. Only the run that
+		// reaches bit 63 picks up the cross-batch extension; for all other runs (and when
+		// extension == 0) the branch resolves to the cheap fall-through.
 		int i = 0;
 		int t = 0;
 		while (n != 0)
 		{
-			int tzcnt = math.tzcnt(n);
-			t += tzcnt;
-			int runLength = math.tzcnt(~(n >> tzcnt));
+			// Iteration 1
+			int tz1 = math.tzcnt(n);
+			t += tz1;
+			int rl1 = math.tzcnt(~(n >> tz1));
+			int wl1 = (t + rl1) >= 64 ? rl1 + extension : rl1;
+			data.Write(dstStartIndex + i, srcStartIndex + t, wl1);
+			i += wl1;
+			t += rl1;
+			// Two-step shift keeps each shift count < 64 — branchless replacement for the
+			// `shift >= 64 ? 0 : n >> shift` guard.
+			n = ((n >> tz1) >> 1) >> (rl1 - 1);
 
-			data.Write(dstStartIndex + i, srcStartIndex + t, runLength);
+			if (n == 0) break;
 
-			i += runLength;
-			t += runLength;
-			int shift = tzcnt + runLength;
-			n = shift >= 64 ? 0 : n >> shift;
+			// Iteration 2
+			int tz2 = math.tzcnt(n);
+			t += tz2;
+			int rl2 = math.tzcnt(~(n >> tz2));
+			int wl2 = (t + rl2) >= 64 ? rl2 + extension : rl2;
+			data.Write(dstStartIndex + i, srcStartIndex + t, wl2);
+			i += wl2;
+			t += rl2;
+			n = ((n >> tz2) >> 1) >> (rl2 - 1);
 		}
 	}
 }

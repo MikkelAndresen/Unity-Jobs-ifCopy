@@ -128,7 +128,7 @@ public static class NativeCollectionExtensions
 	/// <typeparam name="T"></typeparam>
 	/// <typeparam name="V"></typeparam>
 	/// <returns></returns>
-	public unsafe static JobHandle IfCopyToParallel<T, V>(
+	public static unsafe JobHandle IfCopyToParallel<T, V>(
 		this NativeArray<T> src,
 		NativeArray<T> dst,
 		out NativeReference<int> counter,
@@ -141,7 +141,7 @@ public static class NativeCollectionExtensions
 		src, dst, (T*)src.GetUnsafeReadOnlyPtr(), (T*)dst.GetUnsafeReadOnlyPtr(),
 		out counter, indexingBatchCount, writeBatchCount, dependsOn, indices, counts, validator);
 
-	public unsafe static JobHandle IfCopyToParallel<T, V>(
+	public static unsafe JobHandle IfCopyToParallel<T, V>(
 		this NativeArray<T> src,
 		NativeArray<T> dst,
 		T* srcReadOnlyPtr,
@@ -155,17 +155,17 @@ public static class NativeCollectionExtensions
 		V validator = default) where T : unmanaged where V : unmanaged, IBatchValidator<T>
 	{
 		Assert.IsTrue(dst.Length >= src.Length, "Assert Failed: dst.Length < src.Length");
-		int indicesLength = (int)math.ceil(src.Length / 64f);
+		var indicesLength = (int)math.ceil(src.Length / 64f);
 
-		bool tempBits = !indices.IsCreated;
+		var tempBits = !indices.IsCreated;
 		indices = tempBits ? new NativeArray<BitField64>(indicesLength, Allocator.TempJob) : indices;
 
-		bool tempCounts = !counts.IsCreated;
+		var tempCounts = !counts.IsCreated;
 		counts = tempCounts ? new NativeArray<int>(indicesLength, Allocator.TempJob) : counts;
 		counter = new NativeReference<int>(0, Allocator.TempJob);
 
-		DataRW<T> writer = new DataRW<T>(src, dst, srcReadOnlyPtr, dstReadOnlyPtr);
-		ParallelConditionalCopyJob<T, DataRW<T>> copyJob = new ParallelConditionalCopyJob<T, DataRW<T>>(writer, indices, counts);
+		var writer = new DataRW<T>(src, dst, srcReadOnlyPtr, dstReadOnlyPtr);
+		var copyJob = new ParallelConditionalCopyJob<T, DataRW<T>>(writer, indices, counts);
 
 		var handle = ParallelIndexingSumJob<T, V>.Schedule(src, indices, counts, counter, indexingBatchCount, dependsOn, validator);
 		handle = copyJob.Schedule(indicesLength, writeBatchCount, handle);
