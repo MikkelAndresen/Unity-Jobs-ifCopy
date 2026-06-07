@@ -342,10 +342,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7d8dfa1c42369b742b4d99d3b7b55dfe, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  dataLength: 1000000
+  dataLength: 10000000
   useGPUBuffer: 1
   indexingBatchCount: 1024
-  writeBatchCount: 32768
+  writeBatchCount: 1024
   completeInLateUpdate: 0
   useScheduleUtility: 0
   useScheduleUtilityPreAllocatedCollections: 0
