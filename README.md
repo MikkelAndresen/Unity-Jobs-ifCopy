@@ -9,3 +9,8 @@ I used multiple approaches, at first I started out using the unity IJobParallelF
 Due to dissapointing performance of this interface I decided to try my own things essentially making my own version of this.
 Since this I worked on this project last the job system has been updated quite a bit and I believe there are builtin interfaces that are now faster than what I managed back then.
 I do suspect if I go back to this project I could come up with something faster than what is builtin as well.
+
+
+Notes:
+This system makes it easier to do filtering by batch so that one can vectorize the condition manually, unlike the unity
+IJobFilter which only does single elements.
